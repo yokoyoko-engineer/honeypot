@@ -64,7 +64,7 @@ cd honeypot
 ### 2. Docker コンテナをビルド・起動
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 初回は Docker イメージのビルドに数分かかります。
@@ -90,7 +90,7 @@ docker-compose up -d --build
 ## コンテナの停止
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ---
