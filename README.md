@@ -39,7 +39,7 @@
 | バックエンド | Node.js + Express + Socket.IO |
 | リアルタイム通信 | WebSocket (Socket.IO) |
 | コンテナ | Docker / Docker Compose |
-| キャッシュ | Redis |
+| リバースプロキシ | nginx |
 
 ---
 
@@ -47,7 +47,7 @@
 
 以下のソフトウェアをインストールしてください。
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) または Docker Engine
 - Git
 
 ---
@@ -73,8 +73,15 @@ docker compose up -d --build
 
 | URL | 内容 |
 |---|---|
-| http://localhost:5173 | アプリ（ホーム画面） |
-| http://localhost:3000 | バックエンドAPI（確認用） |
+| `http://localhost/` | ローカルアクセス |
+| `http://<サーバーのIPアドレス>/` | 外部からのアクセス |
+
+> **サーバーIPの確認方法**
+> ```bash
+> ip addr show | grep "inet " | grep -v 127.0.0.1
+> # または
+> curl ifconfig.me   # グローバルIPの確認
+> ```
 
 ---
 
@@ -97,8 +104,28 @@ docker compose down
 
 ## ポート一覧
 
-| サービス | ポート |
-|---|---|
-| フロントエンド (Vite) | 5173 |
-| バックエンド (Express) | 3000 |
-| Redis | 6379 |
+| サービス | ポート | 公開 |
+|---|---|---|
+| nginx（フロントエンド + プロキシ） | 80 | ✅ 外部公開 |
+| バックエンド (Express) | 3000 | 🔒 内部のみ（nginx経由） |
+
+---
+
+## アーキテクチャ
+
+```
+外部ユーザー
+    │  :80
+    ▼
+┌────────────────────────┐
+│  nginx (frontendコンテナ)│
+│  ・React SPA 配信       │
+│  ・/socket.io/ → proxy  │
+└──────────┬─────────────┘
+           │ 内部ネットワーク
+           ▼ :3000
+┌─────────────────────────┐
+│  Express + Socket.IO    │
+│  (backendコンテナ)        │
+└─────────────────────────┘
+```

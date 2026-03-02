@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
 
@@ -48,7 +48,7 @@ export function Defender({ socket }: DefenderProps) {
     const [cmdHistory, setCmdHistory] = useState<string[]>([]);
     const [histIdx, setHistIdx] = useState(-1);
     const [alertActive, setAlertActive] = useState(false);
-    const [attackerIp, setAttackerIp] = useState('');
+    const [, setAttackerIp] = useState('');
     const [panel, setPanel] = useState<'terminal' | 'investigate'>('terminal');
     const [damageCandidates, setDamageCandidates] = useState<DamageCandidate[]>([]);
     const [investigationDone, setInvestigationDone] = useState(false);

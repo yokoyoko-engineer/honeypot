@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { Home } from './pages/Home';
 import { Attacker } from './pages/Attacker';
 import { Defender } from './pages/Defender';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+// nginx リバースプロキシ経由でアクセスするため、
+// 同一オリジン（window.location.origin）に接続する
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 function App() {
     const [socket, setSocket] = useState<Socket | null>(null);
