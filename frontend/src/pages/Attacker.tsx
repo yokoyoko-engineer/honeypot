@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 interface AttackerProps {
     socket: Socket | null;
@@ -12,7 +12,7 @@ interface TerminalLine {
     type: 'cmd' | 'output' | 'success' | 'error' | 'warn' | 'system';
 }
 
-type GamePhase = 'IDLE' | 'BRUTE_FORCE' | 'LOGGED_IN' | 'DB_STOLEN' | 'BACKDOOR_CREATED' | 'BLOCKED';
+type GamePhase = 'WAITING' | 'IDLE' | 'BRUTE_FORCE' | 'LOGGED_IN' | 'DB_STOLEN' | 'BACKDOOR_CREATED';
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -26,7 +26,7 @@ function TermLine({ line }: { line: TerminalLine }) {
         system: 'text-purple-400',
     };
     return (
-        <div className={`font-mono text-sm leading-relaxed whitespace-pre-wrap ${colors[line.type]}`}>
+        <div className={`font - mono text - sm leading - relaxed whitespace - pre - wrap ${colors[line.type]} `}>
             {line.type === 'cmd' && <span className="text-green-600 mr-1">$</span>}
             {line.text}
         </div>
@@ -35,42 +35,61 @@ function TermLine({ line }: { line: TerminalLine }) {
 
 export function Attacker({ socket }: AttackerProps) {
     const navigate = useNavigate();
-    const [lines, setLines] = useState<TerminalLine[]>([]);
-    const [phase, setPhase] = useState<GamePhase>('IDLE');
+    const location = useLocation();
+    const roomId = new URLSearchParams(location.search).get('room') || 'UNKNOWN_ROOM';
+
+    const [terminalOutput, setTerminalOutput] = useState<TerminalLine[]>([]);
+    const [phase, setPhase] = useState<GamePhase>('WAITING');
     const [busy, setBusy] = useState(false);
     const [target] = useState('192.168.1.100');
+    const [, setCredentials] = useState<{ username: string; password: string } | null>(null);
+    const [isBlocked, setIsBlocked] = useState(false);
+    const [, setBackdoorInfo] = useState<{ pid: number; port: number; script: string } | null>(null);
+    const [, setShowDB] = useState(false);
+    const [, setDbData] = useState<any>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
 
     const addLine = (text: string, type: TerminalLine['type'] = 'output') => {
-        setLines(prev => [...prev, { id: uid(), text, type }]);
+        setTerminalOutput(prev => [...prev, { id: uid(), text, type }]);
     };
 
     const addLines = (texts: string[], type: TerminalLine['type'] = 'output') => {
         const newLines = texts.map(text => ({ id: uid(), text, type }));
-        setLines(prev => [...prev, ...newLines]);
+        setTerminalOutput(prev => [...prev, ...newLines]);
     };
 
     // 自動スクロール
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [lines]);
+    }, [terminalOutput]);
 
     // Socket イベントリスナー
     useEffect(() => {
-        if (!socket) return;
+        if (!socket) {
+            navigate('/');
+            return;
+        }
+
+        socket.emit('join_room', { roomId, role: 'ATTACKER' });
+
+        socket.on('disconnect', () => {
+            // Handle disconnect
+        });
 
         socket.on('game_state', (data) => {
-            setPhase(data.phase === 'BLOCKED' ? 'BLOCKED' : data.phase);
+            setPhase(data.phase);
+            setIsBlocked(data.phase === 'BLOCKED');
         });
 
         socket.on('bruteforce_success', (data) => {
             setBusy(false);
+            setCredentials(data.credentials);
             addLines([
                 ``,
                 `[+] ブルートフォース完了: ${data.attempts} 試行`,
                 `[+] 認証情報を発見!`,
-                `    ユーザー名: ${data.credentials.username}`,
-                `    パスワード: ${data.credentials.password}`,
+                `    ユーザー名: ${data.credentials.username} `,
+                `    パスワード: ${data.credentials.password} `,
                 ``,
                 `[*] SSHに自動ログイン中...`,
             ], 'success');
@@ -78,14 +97,15 @@ export function Attacker({ socket }: AttackerProps) {
 
             setTimeout(() => {
                 socket.emit('auto_login');
-                addLine(`ssh ${data.credentials.username}@${target}`, 'cmd');
+                addLine(`ssh ${data.credentials.username} @${target} `, 'cmd');
             }, 1000);
         });
 
         socket.on('login_success', (data) => {
             setPhase('LOGGED_IN');
+            const username = data.credentials?.username ?? 'admin';
             addLines([
-                `${data.credentials?.username ?? ''}@${target}'s password:`,
+                `${username} @${target} 's password:`,
                 `Last login: Fri Feb 28 18:00:01 2025 from 192.168.10.20`,
                 ``,
                 `Welcome to Ubuntu 22.04.3 LTS`,
@@ -101,6 +121,7 @@ export function Attacker({ socket }: AttackerProps) {
         socket.on('db_stolen', (data) => {
             setPhase('DB_STOLEN');
             setBusy(false);
+            setDbData(data.data);
 
             const userRows = data.data.users
                 .map((u: any) => `| ${String(u.id).padEnd(3)} | ${u.username.padEnd(10)} | ${u.email.padEnd(30)} | ${u.role.padEnd(15)} |`)
@@ -135,6 +156,7 @@ export function Attacker({ socket }: AttackerProps) {
         socket.on('backdoor_created', (data) => {
             setPhase('BACKDOOR_CREATED');
             setBusy(false);
+            setBackdoorInfo(data);
             addLines([
                 ``,
                 `[+] バックドア作成完了`,
@@ -149,7 +171,7 @@ export function Attacker({ socket }: AttackerProps) {
         });
 
         socket.on('force_logout', (data) => {
-            setPhase('BLOCKED');
+            setIsBlocked(true);
             addLines([
                 ``,
                 `${data.reason}`,
@@ -170,15 +192,20 @@ export function Attacker({ socket }: AttackerProps) {
         });
 
         socket.on('blocked', () => {
-            setPhase('BLOCKED');
+            setIsBlocked(true);
             addLine(`\nConnection refused: このIPはブロックされています。`, 'error');
             setBusy(false);
         });
 
         socket.on('game_reset', () => {
-            setLines([]);
+            setTerminalOutput([]);
             setPhase('IDLE');
             setBusy(false);
+            setIsBlocked(false);
+            setCredentials(null);
+            setBackdoorInfo(null);
+            setDbData(null);
+            setShowDB(false);
             addLine('システムリセット完了。新しいセッションを開始できます。', 'system');
         });
 
@@ -191,8 +218,9 @@ export function Attacker({ socket }: AttackerProps) {
             socket.off('force_logout');
             socket.off('blocked');
             socket.off('game_reset');
+            socket.off('disconnect');
         };
-    }, [socket, phase]);
+    }, [socket, phase, roomId, navigate]);
 
     // ─── フェーズごとのアクション ───────────────────────────
 
@@ -269,7 +297,20 @@ export function Attacker({ socket }: AttackerProps) {
 
     // ─── UI ────────────────────────────────────────────────────
 
-    const isBlocked = phase === 'BLOCKED';
+    if (phase === 'WAITING') {
+        return (
+            <div className="min-h-screen bg-[#0a0f12] text-[#00ffcc] font-mono flex flex-col items-center justify-center p-8">
+                <div className="text-2xl mb-4 font-bold animate-pulse text-red-500">ATTACK SQUAD - Waiting for Target</div>
+                <div className="text-slate-400 mb-8">Room: {roomId} に防御側が参加するのを待機しています...</div>
+                <button
+                    onClick={() => navigate('/')}
+                    className="px-6 py-2 border border-red-900/50 bg-red-950/20 hover:bg-red-900/50 text-red-500 rounded transition-colors"
+                >
+                    Leave Room
+                </button>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-black text-green-400 font-mono flex flex-col">
@@ -290,6 +331,11 @@ export function Attacker({ socket }: AttackerProps) {
                                         phase === 'BRUTE_FORCE' ? '⚡ ATTACKING...' : '⬤ IDLE'}
                     </span>
                 </div>
+                <div className="flex items-center gap-4">
+                    <div className="bg-red-950/40 border border-red-900/50 px-4 py-1 rounded text-sm text-red-300 font-mono">
+                        ROOM: {roomId}
+                    </div>
+                </div>
                 <div className="flex gap-2">
                     <button onClick={() => navigate('/')} className="text-slate-500 hover:text-white text-xs border border-slate-700 px-2 py-1 rounded">← Back</button>
                     <button onClick={handleReset} className="text-slate-500 hover:text-red-400 text-xs border border-slate-700 px-2 py-1 rounded">Reset</button>
@@ -304,13 +350,13 @@ export function Attacker({ socket }: AttackerProps) {
                         Terminal — bash — 120×40
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-0.5 bg-black min-h-0"
-                        style={{ height: 'calc(100vh - 120px)' }}>
-                        {lines.length === 0 && (
+                        style={{ minHeight: 'calc(100vh - 120px)' }}>
+                        {terminalOutput.length === 0 && (
                             <div className="text-slate-600 text-sm">
                                 {`Attacker Terminal v1.0 — Security Training Simulation\n[!] このセッションは研修目的のシミュレーションです\n\n右パネルから攻撃フェーズを選択してください。`}
                             </div>
                         )}
-                        {lines.map(l => <TermLine key={l.id} line={l} />)}
+                        {terminalOutput.map((l: TerminalLine) => <TermLine key={l.id} line={l} />)}
                         {busy && (
                             <div className="text-green-500 animate-pulse text-sm">▊</div>
                         )}

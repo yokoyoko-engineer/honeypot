@@ -35,7 +35,7 @@ function App() {
     return (
         <BrowserRouter>
             <Routes>
-                <Route path="/" element={<Home connected={connected} />} />
+                <Route path="/" element={<Home connected={connected} socket={socket} />} />
                 <Route path="/attacker" element={<Attacker socket={socket} />} />
                 <Route path="/defender" element={<Defender socket={socket} />} />
             </Routes>

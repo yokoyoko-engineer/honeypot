@@ -1,11 +1,45 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Socket } from 'socket.io-client';
+
+interface RoomStatus {
+    id: string;
+    hasAttacker: boolean;
+    hasDefender: boolean;
+    phase: string;
+}
 
 interface HomeProps {
     connected: boolean;
+    socket: Socket | null;
 }
 
-export function Home({ connected }: HomeProps) {
+export function Home({ connected, socket }: HomeProps) {
     const navigate = useNavigate();
+    const [selectedRole, setSelectedRole] = useState<'ATTACKER' | 'DEFENDER' | null>(null);
+    const [rooms, setRooms] = useState<RoomStatus[]>([]);
+
+    useEffect(() => {
+        if (!socket) return;
+
+        socket.emit('get_rooms');
+
+        socket.on('rooms_status', (data: RoomStatus[]) => {
+            setRooms(data);
+        });
+
+        return () => {
+            socket.off('rooms_status');
+        };
+    }, [socket]);
+
+    const handleRoomSelect = (roomId: string) => {
+        if (selectedRole === 'ATTACKER') {
+            navigate(`/attacker?room=${roomId}`);
+        } else if (selectedRole === 'DEFENDER') {
+            navigate(`/defender?room=${roomId}`);
+        }
+    };
 
     return (
         <div className="min-h-screen bg-black text-slate-300 font-mono flex flex-col items-center justify-center p-8">
@@ -37,38 +71,76 @@ export function Home({ connected }: HomeProps) {
                 </div>
             </div>
 
-            {/* ロール選択 */}
-            <div className="w-full max-w-2xl grid grid-cols-2 gap-4">
-                <button
-                    onClick={() => navigate('/attacker')}
-                    disabled={!connected}
-                    className="group p-6 border border-red-900/50 rounded-lg bg-red-950/10 hover:bg-red-950/30 hover:border-red-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-left"
-                >
-                    <div className="text-3xl mb-3">⚔️</div>
-                    <div className="text-red-400 font-bold text-lg mb-1">攻撃側</div>
-                    <div className="text-slate-500 text-xs leading-relaxed">
-                        ブルートフォース攻撃を実行し、認証情報を奪取後、DBを盗みバックドアを構築する
-                    </div>
-                    <div className="mt-3 text-xs text-red-700 group-hover:text-red-400 transition-colors">
-                        Attacker Terminal →
-                    </div>
-                </button>
+            {/* ロール選択 または ルーム選択 */}
+            {!selectedRole ? (
+                <div className="w-full max-w-2xl grid grid-cols-2 gap-4">
+                    <button
+                        onClick={() => setSelectedRole('ATTACKER')}
+                        disabled={!connected}
+                        className="group p-6 border border-red-900/50 rounded-lg bg-red-950/10 hover:bg-red-950/30 hover:border-red-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-left"
+                    >
+                        <div className="text-3xl mb-3">⚔️</div>
+                        <div className="text-red-400 font-bold text-lg mb-1">攻撃側</div>
+                        <div className="text-slate-500 text-xs leading-relaxed">
+                            ブルートフォース攻撃を実行し、認証情報を奪取後、DBを盗みバックドアを構築する
+                        </div>
+                    </button>
 
-                <button
-                    onClick={() => navigate('/defender')}
-                    disabled={!connected}
-                    className="group p-6 border border-blue-900/50 rounded-lg bg-blue-950/10 hover:bg-blue-950/30 hover:border-blue-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-left"
-                >
-                    <div className="text-3xl mb-3">🛡️</div>
-                    <div className="text-blue-400 font-bold text-lg mb-1">防御側</div>
-                    <div className="text-slate-500 text-xs leading-relaxed">
-                        ログを解析し攻撃IPを特定・ブロック、被害範囲を調査してバックドアを遮断する
+                    <button
+                        onClick={() => setSelectedRole('DEFENDER')}
+                        disabled={!connected}
+                        className="group p-6 border border-blue-900/50 rounded-lg bg-blue-950/10 hover:bg-blue-950/30 hover:border-blue-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-left"
+                    >
+                        <div className="text-3xl mb-3">🛡️</div>
+                        <div className="text-blue-400 font-bold text-lg mb-1">防御側</div>
+                        <div className="text-slate-500 text-xs leading-relaxed">
+                            ログを解析し攻撃IPを特定・ブロック、被害範囲を調査してバックドアを遮断する
+                        </div>
+                    </button>
+                </div>
+            ) : (
+                <div className="w-full max-w-2xl bg-slate-900/50 border border-slate-800 rounded-lg p-6">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-lg font-bold flex items-center gap-2">
+                            {selectedRole === 'ATTACKER' ? '⚔️ 攻撃側' : '🛡️ 防御側'} として参加するルームを選択
+                        </h2>
+                        <button onClick={() => setSelectedRole(null)} className="text-xs text-slate-500 hover:text-white underline">
+                            役割を選び直す
+                        </button>
                     </div>
-                    <div className="mt-3 text-xs text-blue-700 group-hover:text-blue-400 transition-colors">
-                        Defender Terminal →
+
+                    <div className="grid gap-3">
+                        {rooms.map(room => {
+                            const isFull = (selectedRole === 'ATTACKER' && room.hasAttacker) ||
+                                (selectedRole === 'DEFENDER' && room.hasDefender);
+                            return (
+                                <button
+                                    key={room.id}
+                                    onClick={() => handleRoomSelect(room.id)}
+                                    disabled={isFull}
+                                    className={`flex items-center justify-between p-4 rounded border transition-colors ${isFull
+                                            ? 'bg-slate-900 border-slate-800 opacity-50 cursor-not-allowed'
+                                            : selectedRole === 'ATTACKER'
+                                                ? 'bg-red-950/10 border-red-900/30 hover:bg-red-950/30 hover:border-red-500'
+                                                : 'bg-blue-950/10 border-blue-900/30 hover:bg-blue-950/30 hover:border-blue-500'
+                                        }`}
+                                >
+                                    <div className="font-bold text-slate-300">{room.id}</div>
+                                    <div className="flex gap-4 text-xs font-mono">
+                                        <div className={room.hasAttacker ? 'text-red-400' : 'text-slate-600'}>
+                                            Attacker: {room.hasAttacker ? 'Waiting' : 'Empty'}
+                                        </div>
+                                        <div className={room.hasDefender ? 'text-blue-400' : 'text-slate-600'}>
+                                            Defender: {room.hasDefender ? 'Waiting' : 'Empty'}
+                                        </div>
+                                    </div>
+                                    {isFull && <div className="text-xs text-slate-500 ml-4">満室</div>}
+                                </button>
+                            );
+                        })}
                     </div>
-                </button>
-            </div>
+                </div>
+            )}
 
             <div className="mt-8 text-xs text-slate-700">
                 Security Sandbox v2.0 — 研修目的シミュレーション

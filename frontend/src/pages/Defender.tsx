@@ -1,16 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
 interface DefenderProps {
     socket: Socket | null;
 }
 
-interface TerminalLine {
-    id: string;
-    text: string;
-    type: 'cmd' | 'output' | 'success' | 'error' | 'warn' | 'system' | 'alert';
-}
+
 
 interface DamageCandidate {
     id: string;
@@ -19,34 +18,12 @@ interface DamageCandidate {
     isCorrect: boolean;
 }
 
-function uid() { return Math.random().toString(36).slice(2, 9); }
-
-function TermLine({ line }: { line: TerminalLine }) {
-    const colors: Record<string, string> = {
-        cmd: 'text-blue-300',
-        output: 'text-slate-300',
-        success: 'text-green-400',
-        error: 'text-red-400',
-        warn: 'text-yellow-300',
-        system: 'text-purple-400',
-        alert: 'text-red-300 bg-red-950/40 px-2 py-0.5 rounded border-l-2 border-red-500',
-    };
-    return (
-        <div className={`font-mono text-sm leading-relaxed whitespace-pre-wrap ${colors[line.type]}`}>
-            {line.type === 'cmd'
-                ? <><span className="text-blue-600 mr-1">defender@server:~$</span>{line.text}</>
-                : line.text
-            }
-        </div>
-    );
-}
-
 export function Defender({ socket }: DefenderProps) {
     const navigate = useNavigate();
-    const [lines, setLines] = useState<TerminalLine[]>([]);
-    const [input, setInput] = useState('');
-    const [cmdHistory, setCmdHistory] = useState<string[]>([]);
-    const [histIdx, setHistIdx] = useState(-1);
+    const location = useLocation();
+    const roomId = new URLSearchParams(location.search).get('room') || 'UNKNOWN_ROOM';
+
+    const [, setGameState] = useState<any>(null);
     const [alertActive, setAlertActive] = useState(false);
     const [, setAttackerIp] = useState('');
     const [panel, setPanel] = useState<'terminal' | 'investigate'>('terminal');
@@ -56,70 +33,108 @@ export function Defender({ socket }: DefenderProps) {
     const [backdoorActive, setBackdoorActive] = useState(false);
     const [gameClear, setGameClear] = useState(false);
     const [blocked, setBlocked] = useState(false);
-    const bottomRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
 
-    const addLine = (text: string, type: TerminalLine['type'] = 'output') => {
-        setLines(prev => [...prev, { id: uid(), text, type }]);
+    const terminalRef = useRef<HTMLDivElement>(null);
+    const xtermRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const isXtermInitialized = useRef(false);
+
+    const writeXterm = (text: string, colorCode: string = '') => {
+        if (!xtermRef.current) return;
+        const textStr = colorCode ? `\x1b[${colorCode}m${text}\x1b[0m` : text;
+        const lines = textStr.split('\n');
+        lines.forEach((line, i) => {
+            xtermRef.current?.write(line + (i < lines.length - 1 ? '\r\n' : ''));
+        });
     };
-    const addLines = (texts: string[], type: TerminalLine['type'] = 'output') => {
-        setLines(prev => [...prev, ...texts.map(text => ({ id: uid(), text, type }))]);
-    };
+
+    // xterm 初期化
+    useEffect(() => {
+        if (isXtermInitialized.current || !terminalRef.current) return;
+        isXtermInitialized.current = true;
+
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#0f172a', // slate-950
+                foreground: '#cbd5e1', // slate-300
+            }
+        });
+        const fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(terminalRef.current);
+        fitAddon.fit();
+
+        xtermRef.current = term;
+        fitAddonRef.current = fitAddon;
+
+        term.onData(data => {
+            if (socket) socket.emit('pty_input', { input: data });
+        });
+
+        const resizeObserver = new ResizeObserver(() => {
+            if (fitAddonRef.current && xtermRef.current) {
+                fitAddonRef.current.fit();
+                if (socket) {
+                    socket.emit('pty_resize', { cols: term.cols, rows: term.rows });
+                }
+            }
+        });
+        resizeObserver.observe(terminalRef.current);
+
+        return () => {
+            resizeObserver.disconnect();
+            term.dispose();
+            isXtermInitialized.current = false;
+        };
+    }, [socket]);
 
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [lines]);
+        if (!socket) {
+            navigate('/');
+            return;
+        }
 
-    useEffect(() => {
-        if (!socket) return;
+        socket.emit('join_room', { roomId, role: 'DEFENDER' });
+
+        socket.on('pty_output', (data) => {
+            xtermRef.current?.write(data.output);
+        });
+
+        socket.on('disconnect', () => {
+            writeXterm('\r\nサーバーとの接続が切れました。\r\n', '31');
+            setGameState((prev: any) => ({ ...prev, phase: 'WAITING' }));
+        });
+
+        socket.on('game_state', (state) => {
+            setGameState(state);
+            if (state.phase === 'WAITING') {
+                writeXterm('\r\nゲーム開始を待機中...\r\n', '35');
+            } else if (state.phase === 'IDLE') {
+                writeXterm('\r\nゲーム開始。攻撃者の接続を待機中...\r\n', '35');
+            }
+        });
 
         socket.on('bruteforce_detected', (data) => {
             setAlertActive(true);
             setAttackerIp(data.ip);
-            addLines([
-                ``,
-                `╔══════════════════════════════════════════════════════════╗`,
-                `║  🚨 セキュリティアラート: 攻撃を検知しました        🚨  ║`,
-                `║   ${data.message}   ║`,
-                `║   発生時刻: ${new Date(data.timestamp).toLocaleTimeString()}                                 ║`,
-                `╚══════════════════════════════════════════════════════════╝`,
-            ], 'alert');
-
+            writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════════╗\r\n║  🚨 セキュリティアラート: 攻撃を検知しました        🚨  ║\r\n║   ${data.message}   ║\r\n║   発生時刻: ${new Date(data.timestamp).toLocaleTimeString()}                                 ║\r\n╚══════════════════════════════════════════════════════════╝\r\n`, '41;37');
             setTimeout(() => setAlertActive(false), 8000);
-        });
-
-        socket.on('logs_data', (data) => {
-            setAttackerIp(data.attackerIp);
-            addLine(`\n--- /var/log/auth.log の内容 ---`);
-            data.authlog.forEach((line: string) => addLine(line, 'output'));
-            addLine(`--- ログ終端 ---\n`);
-        });
-
-        socket.on('netstat_data', (data) => {
-            addLine(`\n--- netstat 出力 ---`);
-            addLine(data.output, 'output');
-            addLine(`---\n`);
         });
 
         socket.on('block_result', (data) => {
             if (data.success) {
-                addLine(data.message, 'success');
-                addLine(`[+] IPブロック完了。攻撃者の接続を切断しました。`, 'success');
+                writeXterm(`\r\n[+] IPブロック完了。攻撃者の接続を切断しました。\r\n`, '32');
                 setBlocked(true);
             } else {
-                addLine(`iptables: ${data.message}`, 'error');
+                writeXterm(`\r\n[!] ${data.message}\r\n`, '31');
             }
         });
 
         socket.on('backdoor_still_active', (data) => {
             setBackdoorActive(true);
             setBackdoorPid(data.pid);
-            addLines([
-                ``,
-                `⚠️  警告: ${data.message}`,
-                `   ポート 4444 で通信が継続中 (PID: ${data.pid})`,
-                `   「被害調査」タブで詳細を確認してください。`,
-            ], 'warn');
+            writeXterm(`\r\n⚠️  警告: ${data.message}\r\n   ポート 4444 で通信が継続中(PID: ${data.pid})\r\n   「被害調査」タブで詳細を確認してください。\r\n`, '33');
         });
 
         socket.on('damage_report', (data) => {
@@ -132,26 +147,20 @@ export function Defender({ socket }: DefenderProps) {
         socket.on('backdoor_removed', (data) => {
             if (data.success) {
                 setBackdoorActive(false);
-                addLine(`\n[+] バックドア (${data.value}) を正常に遮断しました。`, 'success');
+                writeXterm(`\r\n[+] バックドア(${data.value}) を正常に遮断しました。\r\n`, '32');
                 setPanel('terminal');
             } else {
-                addLine(`\n${data.message}`, 'error');
+                writeXterm(`\r\n[!] ${data.message}\r\n`, '31');
             }
         });
 
         socket.on('game_clear', (data) => {
             setGameClear(true);
-            addLines([
-                ``,
-                `╔══════════════════════════════════════════════════════╗`,
-                `║  ✅ インシデント対応完了                              ║`,
-                `║  ${data.message}  ║`,
-                `╚══════════════════════════════════════════════════════╝`,
-            ], 'success');
+            writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  ✅ インシデント対応完了                              ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '32');
         });
 
         socket.on('game_reset', () => {
-            setLines([]);
+            xtermRef.current?.clear();
             setAlertActive(false);
             setAttackerIp('');
             setPanel('terminal');
@@ -161,13 +170,15 @@ export function Defender({ socket }: DefenderProps) {
             setBackdoorActive(false);
             setGameClear(false);
             setBlocked(false);
-            addLine('システムリセット完了。待機状態です。', 'system');
+            setGameState({ phase: 'WAITING', dbStolen: false, backdoorActive: false });
+            writeXterm('\r\nシステムリセット完了。待機状態です。\r\n', '35');
         });
 
         return () => {
+            socket.off('pty_output');
+            socket.off('disconnect');
+            socket.off('game_state');
             socket.off('bruteforce_detected');
-            socket.off('logs_data');
-            socket.off('netstat_data');
             socket.off('block_result');
             socket.off('backdoor_still_active');
             socket.off('damage_report');
@@ -175,155 +186,21 @@ export function Defender({ socket }: DefenderProps) {
             socket.off('game_clear');
             socket.off('game_reset');
         };
-    }, [socket]);
-
-    // ─── コマンド処理 ──────────────────────────────────────────
-    const handleCommand = (rawCmd: string) => {
-        const cmd = rawCmd.trim();
-        if (!cmd) return;
-
-        addLine(cmd, 'cmd');
-        setCmdHistory(prev => [cmd, ...prev].slice(0, 50));
-        setHistIdx(-1);
-        setInput('');
-
-        // ─── tail -f /var/log/auth.log ────────────────
-        if (cmd.match(/^tail\s+(-f\s+)?\/var\/log\/auth\.log/)) {
-            socket?.emit('get_logs');
-            return;
-        }
-
-        // ─── netstat ──────────────────────────────────
-        if (cmd.match(/^netstat\b/)) {
-            socket?.emit('get_netstat');
-            return;
-        }
-
-        // ─── iptables でIPブロック ─────────────────────
-        const iptablesMatch = cmd.match(/^iptables\s+-A\s+INPUT\s+-s\s+([\d.]+)\s+-j\s+DROP/);
-        if (iptablesMatch) {
-            const ip = iptablesMatch[1];
-            socket?.emit('block_attacker', { ip });
-            addLine(`iptables: ルール追加を試みています (-s ${ip} -j DROP)...`);
-            return;
-        }
-
-        // ─── kill <PID> ───────────────────────────────
-        const killMatch = cmd.match(/^kill\s+(-9\s+)?(\d+)/);
-        if (killMatch) {
-            const pid = parseInt(killMatch[2]);
-            socket?.emit('remove_backdoor', { method: 'kill', value: pid });
-            addLine(`kill: PID ${pid} にシグナルを送信中...`);
-            return;
-        }
-
-        // ─── rm でバックドアを削除 ─────────────────────
-        const rmMatch = cmd.match(/^rm\s+(-rf?\s+)?(.+)/);
-        if (rmMatch) {
-            const path = rmMatch[2];
-            socket?.emit('remove_backdoor', { method: 'rm', value: path });
-            addLine(`rm: ${path} を削除中...`);
-            return;
-        }
-
-        // ─── find でバックドアを探す ──────────────────
-        if (cmd.match(/^find\b/)) {
-            if (backdoorActive) {
-                addLines([
-                    `/tmp/.hidden/bd.sh`,
-                    `/tmp/.hidden/.nohup.out`,
-                    ``,
-                    `不審なファイルを発見しました。「kill <PID>」または「rm -rf /tmp/.hidden」で対処できます。`,
-                ], 'warn');
-            } else {
-                addLine(`（不審なファイルは見つかりませんでした）`);
-            }
-            return;
-        }
-
-        // ─── ps aux ───────────────────────────────────
-        if (cmd.match(/^ps\b/)) {
-            const lines = [
-                `USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND`,
-                `root           1  0.0  0.1 103444 10220 ?        Ss   08:00   0:01 /sbin/init`,
-                `root         987  0.0  0.1  72312  5860 ?        Ss   08:00   0:00 sshd: /usr/sbin/sshd -D`,
-                `root        1023  0.0  1.2 589672 51200 ?        Ssl  08:00   0:08 /usr/sbin/mysqld`,
-                `root        2007  0.0  0.0  14548  3200 ?        Ss   11:45   0:00 sshd: admin [priv]`,
-                ...(backdoorActive ? [
-                    `root    ${backdoorPid ?? 9999}  0.0  0.0   4288  1024 ?        S    11:45   0:00 /bin/bash /tmp/.hidden/bd.sh`,
-                    `root    ${(backdoorPid ?? 9999) + 1}  0.0  0.0   2444   904 ?        S    11:45   0:00 nc -lnvp 4444 -e /bin/bash`,
-                ] : []),
-            ];
-            addLines(lines);
-            return;
-        }
-
-        // ─── clear ────────────────────────────────────
-        if (cmd === 'clear') {
-            setLines([]);
-            return;
-        }
-
-        // ─── 被害調査 ──────────────────────────────────
-        if (cmd === 'investigate' || cmd === 'sudo investigate') {
-            socket?.emit('investigate_damage');
-            addLine(`被害調査を開始します...`, 'system');
-            return;
-        }
-
-        // ─── help ─────────────────────────────────────
-        if (cmd === 'help') {
-            addLines([
-                ``,
-                `利用可能なコマンド:`,
-                `  tail -f /var/log/auth.log  : リアルタイムログ確認`,
-                `  netstat -an                 : ネットワーク接続確認`,
-                `  ps aux                      : プロセス確認`,
-                `  find /tmp -name "*.sh"      : 不審ファイル探索`,
-                `  iptables -A INPUT -s <IP> -j DROP  : IPブロック`,
-                `  kill -9 <PID>               : プロセス強制終了`,
-                `  rm -rf /tmp/.hidden         : バックドアファイル削除`,
-                `  investigate                 : 被害調査パネルを開く`,
-                `  clear                       : 画面クリア`,
-                ``,
-            ]);
-            return;
-        }
-
-        // 不明コマンド
-        addLine(`bash: ${cmd}: command not found`, 'error');
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') {
-            handleCommand(input);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            const next = Math.min(histIdx + 1, cmdHistory.length - 1);
-            setHistIdx(next);
-            setInput(cmdHistory[next] ?? '');
-        } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            const next = Math.max(histIdx - 1, -1);
-            setHistIdx(next);
-            setInput(next === -1 ? '' : cmdHistory[next]);
-        }
-    };
+    }, [socket, roomId, navigate]);
 
     const handleCandidateSelect = (c: DamageCandidate) => {
         if (c.isCorrect) {
             setInvestigationDone(true);
-            addLine(`\n[!] ${c.path} への不正アクセス痕跡を確認。DB情報が抜き取られていました。`, 'warn');
+            writeXterm(`\r\n[!] ${c.path} への不正アクセス痕跡を確認。DB情報が抜き取られていました。\r\n`, '33');
             if (backdoorActive) {
-                addLine(`[!] バックドアプロセス (PID: ${backdoorPid}) が現在も稼働中。「ps aux」で確認後、遮断してください。`, 'warn');
+                writeXterm(`\r\n[!] バックドアプロセス(PID: ${backdoorPid}) が現在も稼働中。「ps aux」で確認後、遮断してください。\r\n`, '33');
             }
             setPanel('terminal');
         } else {
-            addLine(`\n[調査] ${c.path}: 変更の痕跡なし`, 'output');
+            writeXterm(`\r\n[調査] ${c.path}: 変更の痕跡なし\r\n`, '37');
         }
     };
 
-    // ─── UI ────────────────────────────────────────────────────
     return (
         <div className={`min-h-screen bg-slate-950 text-slate-300 font-mono flex flex-col transition-colors duration-300 ${alertActive ? 'bg-red-950/20' : ''}`}>
 
@@ -342,6 +219,9 @@ export function Defender({ socket }: DefenderProps) {
                     {blocked && <span className="text-xs bg-green-900 text-green-300 px-2 py-0.5 rounded-full">🛡 攻撃者ブロック済み</span>}
                     {backdoorActive && <span className="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded-full animate-pulse">⚠ バックドア検出</span>}
                     {gameClear && <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded-full">✅ インシデント解決</span>}
+                    <div className="bg-blue-950/40 border border-blue-900/50 px-4 py-1 flex items-center gap-2 rounded text-sm text-blue-300 font-mono">
+                        ROOM: {roomId}
+                    </div>
                 </div>
                 <div className="flex gap-2">
                     <button
@@ -357,7 +237,7 @@ export function Defender({ socket }: DefenderProps) {
             {/* タブ */}
             <div className="flex border-b border-slate-800 bg-slate-900">
                 <button
-                    onClick={() => setPanel('terminal')}
+                    onClick={() => { setPanel('terminal'); setTimeout(() => fitAddonRef.current?.fit(), 100); }}
                     className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'terminal' ? 'text-blue-400 border-b-2 border-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
                 >
                     Terminal
@@ -370,48 +250,20 @@ export function Defender({ socket }: DefenderProps) {
                 </button>
             </div>
 
-            {/* ─── ターミナルパネル ───────────────────────── */}
-            {panel === 'terminal' && (
-                <div className="flex flex-col flex-1" style={{ height: 'calc(100vh - 110px)' }}>
-                    {/* 出力エリア */}
-                    <div
-                        className="flex-1 overflow-y-auto p-4 space-y-0.5 cursor-text"
-                        onClick={() => inputRef.current?.focus()}
-                    >
-                        {lines.length === 0 && (
-                            <div className="text-slate-600 text-sm whitespace-pre-wrap">
-                                {`Defender Terminal — Security Training Simulation
-サーバー: 192.168.1.100 (Ubuntu 22.04)
-
-「help」でコマンド一覧を表示できます。
-攻撃者からのアラートを待機中...`}
-                            </div>
-                        )}
-                        {lines.map(l => <TermLine key={l.id} line={l} />)}
-                        <div ref={bottomRef} />
-                    </div>
-
-                    {/* 入力エリア */}
-                    <div className="border-t border-slate-800 bg-slate-900 px-4 py-2 flex items-center gap-2">
-                        <span className="text-blue-500 text-sm shrink-0">defender@server:~$</span>
-                        <input
-                            ref={inputRef}
-                            value={input}
-                            onChange={e => setInput(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            className="flex-1 bg-transparent text-slate-200 text-sm outline-none font-mono"
-                            placeholder="コマンドを入力 (help で一覧表示)"
-                            autoFocus
-                            autoComplete="off"
-                            spellCheck={false}
-                        />
-                    </div>
-                </div>
-            )}
+            {/* ─── ターミナルパネル (DOMは常に存在させ、displayで表示切替) ───────────────────────── */}
+            <div
+                className="flex-1 p-4"
+                style={{
+                    display: panel === 'terminal' ? 'block' : 'none',
+                    minHeight: 'calc(100vh - 110px)'
+                }}
+            >
+                <div ref={terminalRef} className="w-full h-full" />
+            </div>
 
             {/* ─── 被害調査パネル ─────────────────────────── */}
             {panel === 'investigate' && (
-                <div className="flex-1 overflow-y-auto p-6 space-y-6" style={{ height: 'calc(100vh - 110px)' }}>
+                <div className="flex-1 overflow-y-auto p-6 space-y-6" style={{ minHeight: 'calc(100vh - 110px)' }}>
                     <div>
                         <h2 className="text-yellow-400 font-bold text-sm mb-1">📋 被害範囲調査</h2>
                         <p className="text-slate-500 text-xs">
@@ -458,7 +310,7 @@ export function Defender({ socket }: DefenderProps) {
                                 <div className="text-blue-300">$ rm -rf /tmp/.hidden</div>
                             </div>
                             <button
-                                onClick={() => setPanel('terminal')}
+                                onClick={() => { setPanel('terminal'); setTimeout(() => fitAddonRef.current?.fit(), 100); }}
                                 className="text-xs bg-blue-900 hover:bg-blue-800 text-blue-300 px-3 py-1.5 rounded"
                             >
                                 ターミナルに戻る
