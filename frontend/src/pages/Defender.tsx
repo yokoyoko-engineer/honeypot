@@ -10,14 +10,6 @@ interface DefenderProps {
 }
 
 
-
-interface DamageCandidate {
-    id: string;
-    path: string;
-    description: string;
-    isCorrect: boolean;
-}
-
 export function Defender({ socket }: DefenderProps) {
     const navigate = useNavigate();
     const location = useLocation();
@@ -26,10 +18,7 @@ export function Defender({ socket }: DefenderProps) {
     const [, setGameState] = useState<any>(null);
     const [alertActive, setAlertActive] = useState(false);
     const [, setAttackerIp] = useState('');
-    const [panel, setPanel] = useState<'terminal' | 'investigate'>('terminal');
-    const [damageCandidates, setDamageCandidates] = useState<DamageCandidate[]>([]);
-    const [investigationDone, setInvestigationDone] = useState(false);
-    const [backdoorPid, setBackdoorPid] = useState<number | null>(null);
+    const [panel, setPanel] = useState<'terminal' | 'playbook'>('terminal');
     const [backdoorActive, setBackdoorActive] = useState(false);
     const [gameClear, setGameClear] = useState(false);
     const [blocked, setBlocked] = useState(false);
@@ -115,10 +104,11 @@ export function Defender({ socket }: DefenderProps) {
             }
         });
 
-        socket.on('bruteforce_detected', (data) => {
+        socket.on('attack_detected', (data) => {
             setAlertActive(true);
             setAttackerIp(data.ip);
-            writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════════╗\r\n║  🚨 セキュリティアラート: 攻撃を検知しました        🚨  ║\r\n║   ${data.message}   ║\r\n║   発生時刻: ${new Date(data.timestamp).toLocaleTimeString()}                                 ║\r\n╚══════════════════════════════════════════════════════════╝\r\n`, '41;37');
+            writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════════╗\r\n║  🚨 セキュリティアラート: 異常なネットワーク活動を検知    🚨  ║\r\n║   ${data.message}   ║\r\n║   発生時刻: ${new Date(data.timestamp).toLocaleTimeString()}                                 ║\r\n╚══════════════════════════════════════════════════════════╝\r\n`, '41;37');
+            writeXterm(`\r\n[システム] 「Playbook（対応マニュアル）」タブを開き、調査手順に従って対応してください。\r\n`, '33');
             setTimeout(() => setAlertActive(false), 8000);
         });
 
@@ -133,15 +123,11 @@ export function Defender({ socket }: DefenderProps) {
 
         socket.on('backdoor_still_active', (data) => {
             setBackdoorActive(true);
-            setBackdoorPid(data.pid);
             writeXterm(`\r\n⚠️  警告: ${data.message}\r\n   ポート 4444 で通信が継続中(PID: ${data.pid})\r\n   「被害調査」タブで詳細を確認してください。\r\n`, '33');
         });
 
-        socket.on('damage_report', (data) => {
-            setDamageCandidates(data.candidates);
-            setBackdoorActive(data.backdoorActive);
-            setBackdoorPid(data.backdoorPid);
-            setPanel('investigate');
+        socket.on('damage_report', () => {
+            // ターミナルから操作させるためUIでは処理しない
         });
 
         socket.on('backdoor_removed', (data) => {
@@ -164,9 +150,6 @@ export function Defender({ socket }: DefenderProps) {
             setAlertActive(false);
             setAttackerIp('');
             setPanel('terminal');
-            setDamageCandidates([]);
-            setInvestigationDone(false);
-            setBackdoorPid(null);
             setBackdoorActive(false);
             setGameClear(false);
             setBlocked(false);
@@ -178,7 +161,7 @@ export function Defender({ socket }: DefenderProps) {
             socket.off('pty_output');
             socket.off('disconnect');
             socket.off('game_state');
-            socket.off('bruteforce_detected');
+            socket.off('attack_detected');
             socket.off('block_result');
             socket.off('backdoor_still_active');
             socket.off('damage_report');
@@ -188,18 +171,7 @@ export function Defender({ socket }: DefenderProps) {
         };
     }, [socket, roomId, navigate]);
 
-    const handleCandidateSelect = (c: DamageCandidate) => {
-        if (c.isCorrect) {
-            setInvestigationDone(true);
-            writeXterm(`\r\n[!] ${c.path} への不正アクセス痕跡を確認。DB情報が抜き取られていました。\r\n`, '33');
-            if (backdoorActive) {
-                writeXterm(`\r\n[!] バックドアプロセス(PID: ${backdoorPid}) が現在も稼働中。「ps aux」で確認後、遮断してください。\r\n`, '33');
-            }
-            setPanel('terminal');
-        } else {
-            writeXterm(`\r\n[調査] ${c.path}: 変更の痕跡なし\r\n`, '37');
-        }
-    };
+
 
     return (
         <div className={`min-h-screen bg-slate-950 text-slate-300 font-mono flex flex-col transition-colors duration-300 ${alertActive ? 'bg-red-950/20' : ''}`}>
@@ -207,7 +179,7 @@ export function Defender({ socket }: DefenderProps) {
             {/* アラートバナー */}
             {alertActive && (
                 <div className="bg-red-700 text-white text-center py-2 px-4 text-sm font-bold animate-pulse">
-                    🚨 セキュリティアラート: SSH ブルートフォース攻撃を検知 — ログを確認してください
+                    🚨 セキュリティアラート: 未知の脅威を検知 — Playbookを確認し、ログ調査と対処を実行してください
                 </div>
             )}
 
@@ -224,12 +196,6 @@ export function Defender({ socket }: DefenderProps) {
                     </div>
                 </div>
                 <div className="flex gap-2">
-                    <button
-                        onClick={() => { socket?.emit('investigate_damage'); setPanel('investigate'); }}
-                        className="text-xs border border-yellow-700 text-yellow-400 hover:bg-yellow-900/30 px-2 py-1 rounded"
-                    >
-                        被害調査
-                    </button>
                     <button onClick={() => navigate('/')} className="text-slate-500 hover:text-white text-xs border border-slate-700 px-2 py-1 rounded">← Back</button>
                 </div>
             </div>
@@ -243,10 +209,10 @@ export function Defender({ socket }: DefenderProps) {
                     Terminal
                 </button>
                 <button
-                    onClick={() => setPanel('investigate')}
-                    className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'investigate' ? 'text-yellow-400 border-b-2 border-yellow-500' : 'text-slate-500 hover:text-slate-300'}`}
+                    onClick={() => setPanel('playbook')}
+                    className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'playbook' ? 'text-yellow-400 border-b-2 border-yellow-500' : 'text-slate-500 hover:text-slate-300'}`}
                 >
-                    被害調査 {backdoorActive && '⚠'}
+                    Playbook (対応マニュアル) {backdoorActive && '⚠'}
                 </button>
             </div>
 
@@ -261,68 +227,92 @@ export function Defender({ socket }: DefenderProps) {
                 <div ref={terminalRef} className="w-full h-full" />
             </div>
 
-            {/* ─── 被害調査パネル ─────────────────────────── */}
-            {panel === 'investigate' && (
+            {/* ─── Playbook (対応マニュアル) パネル ─────────────────────────── */}
+            {panel === 'playbook' && (
                 <div className="flex-1 overflow-y-auto p-6 space-y-6" style={{ minHeight: 'calc(100vh - 110px)' }}>
                     <div>
-                        <h2 className="text-yellow-400 font-bold text-sm mb-1">📋 被害範囲調査</h2>
-                        <p className="text-slate-500 text-xs">
-                            不審なアクセスが検知されました。どの箇所に被害があったか特定してください。
+                        <h2 className="text-yellow-400 font-bold text-lg mb-2">📋 セキュリティインシデント対応 Playbook</h2>
+                        <p className="text-slate-400 text-sm">
+                            インシデント発生時は、以下のステップに従ってターミナルから各種コマンドを実行し、脅威を特定・無効化してください。<br />
+                            <span className="text-red-400">※ ボタンによるショートカットはありません。すべての操作はTerminalで行います。</span>
                         </p>
                     </div>
 
-                    {/* 候補リスト */}
-                    {damageCandidates.length > 0 ? (
-                        <div className="space-y-3">
-                            <p className="text-xs text-slate-400">以下の候補からアクセス証跡があった箇所を選択してください:</p>
-                            {damageCandidates.map(c => (
-                                <button
-                                    key={c.id}
-                                    onClick={() => handleCandidateSelect(c)}
-                                    className="w-full text-left p-3 rounded border border-slate-700 hover:border-yellow-700 hover:bg-yellow-950/20 transition-colors"
-                                >
-                                    <div className="text-xs text-slate-200 font-mono mb-1">{c.path}</div>
-                                    <div className="text-xs text-slate-500">{c.description}</div>
-                                </button>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="text-slate-500 text-xs">
-                            攻撃が発生してから「被害調査」を実行してください。
-                            <br />ターミナルに戻り <code className="text-blue-400">investigate</code> と入力するか、上の「被害調査」ボタンを押してください。
-                        </div>
-                    )}
-
-                    {/* バックドア対応 */}
-                    {investigationDone && backdoorActive && (
-                        <div className="mt-4 p-4 border border-red-800 rounded bg-red-950/30 text-sm space-y-3">
-                            <div className="text-red-400 font-bold">⚠️ バックドアが検出されました</div>
-                            <p className="text-slate-400 text-xs">
-                                PID <span className="text-yellow-400">{backdoorPid}</span> のプロセスがポート 4444 でネットワーク接続を維持し続けています。
-                                ターミナルに戻り、以下のコマンドで対処してください:
+                    <div className="space-y-4">
+                        {/* Step 1: ログの調査 */}
+                        <div className="p-4 border border-slate-700 rounded bg-slate-900/50">
+                            <h3 className="text-blue-400 font-bold mb-2">Step 1: 攻撃の種類とIPの特定 (トリアージ)</h3>
+                            <p className="text-slate-300 text-xs mb-3">
+                                サーバー内で何が起きているか、ログファイルや現在の接続状況から調査します。
                             </p>
-                            <div className="bg-black/40 rounded p-2 text-xs space-y-1">
-                                <div className="text-slate-500"># プロセスを確認</div>
-                                <div className="text-blue-300">$ ps aux | grep {backdoorPid}</div>
-                                <div className="text-slate-500 mt-2"># プロセスを終了</div>
-                                <div className="text-blue-300">$ kill -9 {backdoorPid}</div>
-                                <div className="text-slate-500 mt-2"># またはスクリプトを削除</div>
-                                <div className="text-blue-300">$ rm -rf /tmp/.hidden</div>
-                            </div>
-                            <button
-                                onClick={() => { setPanel('terminal'); setTimeout(() => fitAddonRef.current?.fit(), 100); }}
-                                className="text-xs bg-blue-900 hover:bg-blue-800 text-blue-300 px-3 py-1.5 rounded"
-                            >
-                                ターミナルに戻る
-                            </button>
+                            <ul className="text-xs text-slate-400 space-y-2 list-disc pl-5">
+                                <li><strong>SSHログイン試行の確認:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">tail /var/log/auth.log</code><br />(大量のFailed passwordがないか確認)</li>
+                                <li><strong>Webサーバー(HTTP)への攻撃確認:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">tail /var/log/nginx/access.log</code><br />(SQLiやRCE、大量のDDoSアクセス等の不審なURLリクエストを探す)</li>
+                                <li><strong>システムエラーや不正プロセスの痕跡:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">tail /var/log/syslog</code> または <code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">tail /var/log/vsftpd.log</code><br />(FTPやランサムウェア等の特異な活動ログ)</li>
+                                <li><strong>現在のアクティブなネットワーク接続:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">netstat -an</code><br />(外部からの不審な確立済みセッションや大量のSYN_RECVを探す)</li>
+                            </ul>
                         </div>
-                    )}
 
-                    {investigationDone && !backdoorActive && (
-                        <div className="p-4 border border-green-800 rounded bg-green-950/20 text-sm">
-                            <div className="text-green-400 font-bold">✅ バックドアは遮断されています</div>
+                        {/* Step 2: 攻撃元のブロック */}
+                        <div className="p-4 border border-slate-700 rounded bg-slate-900/50">
+                            <h3 className="text-blue-400 font-bold mb-2">Step 2: 攻撃元IPのブロック (封じ込め)</h3>
+                            <p className="text-slate-300 text-xs mb-3">
+                                ログから特定した攻撃者のIPアドレスをファイアウォールで遮断し、攻撃の継続を防ぎます。
+                            </p>
+                            <div className="text-xs text-slate-400">
+                                実行コマンド:<br />
+                                <code className="text-green-400 bg-slate-800 px-2 py-1 rounded inline-block mt-1">iptables -A INPUT -s &lt;攻撃者のIPアドレス&gt; -j DROP</code>
+                            </div>
                         </div>
-                    )}
+
+                        {/* Step 3: 不正プロセスの停止・復旧 */}
+                        <div className="p-4 border border-slate-700 rounded bg-slate-900/50">
+                            <h3 className="text-blue-400 font-bold mb-2">Step 3: 不正プロセスの特定と排除 (根絶)</h3>
+                            <p className="text-slate-300 text-xs mb-3">
+                                攻撃者が既にバックドア(nc)を仕掛けたり、ランサムウェア(暗号化ツール)を実行している可能性があります。<br />
+                                プロセス一覧から不正なPIDを特定し、強制終了させます。
+                            </p>
+                            <ul className="text-xs text-slate-400 space-y-2 list-disc pl-5">
+                                <li><strong>プロセスの確認:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">ps aux</code><br />(不審なスクリプト `bd.sh`、`nc`、`encrypt` 等がないか確認)</li>
+                                <li><strong>プロセスの強制終了:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">kill -9 &lt;PID&gt;</code></li>
+                                <li><strong>攻撃者が作成した不審ファイルの削除:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">rm -rf /tmp/.hidden</code> や <code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">rm /var/www/html/webshell.php</code></li>
+                            </ul>
+                            <p className="text-xs text-yellow-400 mt-3">
+                                ※ 基本的な攻撃（SSH総当たり、SQLi、RCEなど）は、上記のStep1〜3で隔離・排除が完了します。
+                            </p>
+                        </div>
+
+                        {/* Step 4: 高度なインフラリソースとカーネルの調査 */}
+                        <div className="p-4 border border-indigo-900 rounded bg-indigo-950/30">
+                            <h3 className="text-indigo-400 font-bold mb-2">Step 4: インフラリソースとカーネルの調査 (Advanced)</h3>
+                            <p className="text-slate-300 text-xs mb-3">
+                                DDoS(SYN Flood)やリソース枯渇(Fork Bomb, Slowloris)攻撃では、OSやカーネルレベルの確認・防御が必要です。
+                            </p>
+                            <ul className="text-xs text-slate-400 space-y-2 list-disc pl-5">
+                                <li><strong>現在のアクティブなソケット・接続状態:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">ss -s</code><br />(TCPのSYN-RECVやESTABが異常に多くないか確認)</li>
+                                <li><strong>カーネルメッセージ(OOMやSYN flood警告など):</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">dmesg | tail</code></li>
+                                <li><strong>メモリ枯渇状態の確認:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">free -m</code></li>
+                                <li><strong>ファイルディスクリプタ(FD)占有状況:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">lsof -i :80</code></li>
+                                <li><strong>カーネルパラメータの変更 (SYN Flood防御):</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">sysctl -w net.ipv4.tcp_syncookies=1</code></li>
+                            </ul>
+                        </div>
+
+                        {/* Step 5: 永続化（Persistence）の排除 */}
+                        <div className="p-4 border border-indigo-900 rounded bg-indigo-950/30">
+                            <h3 className="text-indigo-400 font-bold mb-2">Step 5: 永続化機能の排除 (Advanced)</h3>
+                            <p className="text-slate-300 text-xs mb-3">
+                                攻撃者がバックドアを自動起動(Cron)させたり、公開鍵(SSH)を設置したり、カーネルモジュール(LKM)として潜伏している場合の調査と排除です。
+                            </p>
+                            <ul className="text-xs text-slate-400 space-y-2 list-disc pl-5">
+                                <li><strong>不正な定期実行ジョブの確認・削除:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">crontab -l</code><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">rm /etc/cron.d/malicious_job</code></li>
+                                <li><strong>不正なSSH公開鍵の確認・削除:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">cat ~/.ssh/authorized_keys</code><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">rm ~/.ssh/authorized_keys</code></li>
+                                <li><strong>不正なカーネルモジュール(Rootkit)の確認・排除:</strong><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">lsmod</code><br /><code className="text-green-400 bg-slate-800 px-1 py-0.5 rounded">rmmod &lt;モジュール名&gt;</code></li>
+                            </ul>
+                            <p className="text-xs text-yellow-400 mt-3">
+                                ※ 該当する脅威をすべて取り除くと、自動的に「インシデント解決 (Game Clear)」となります。
+                            </p>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
