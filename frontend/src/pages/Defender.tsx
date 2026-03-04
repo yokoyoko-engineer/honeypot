@@ -142,7 +142,13 @@ export function Defender({ socket }: DefenderProps) {
 
         socket.on('game_clear', (data) => {
             setGameClear(true);
-            writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  ✅ インシデント対応完了                              ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '32');
+            const isDefenderWin = data.winner !== 'attacker';
+
+            if (isDefenderWin) {
+                writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  ✅ MISSION ACCOMPLISHED - INCIDENT RESOLVED         ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '32');
+            } else {
+                writeXterm(`\r\n\r\n╔══════════════════════════════════════════════════════╗\r\n║  💀 MISSION FAILED - SYSTEM COMPROMISED              ║\r\n║  ${data.message}  ║\r\n╚══════════════════════════════════════════════════════╝\r\n`, '31');
+            }
         });
 
         socket.on('game_reset', () => {

@@ -10,13 +10,13 @@
         "preview": "vite preview"
     },
     "dependencies": {
+        "@xterm/addon-fit": "^0.11.0",
+        "@xterm/xterm": "^6.0.0",
         "lucide-react": "^0.370.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
         "react-router-dom": "^6.30.3",
-        "socket.io-client": "^4.7.5",
-        "@xterm/xterm": "latest",
-        "@xterm/addon-fit": "latest"
+        "socket.io-client": "^4.7.5"
     },
     "devDependencies": {
         "@types/react": "^18.2.66",
