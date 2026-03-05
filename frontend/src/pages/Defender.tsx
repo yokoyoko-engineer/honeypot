@@ -15,10 +15,10 @@ export function Defender({ socket }: DefenderProps) {
     const location = useLocation();
     const roomId = new URLSearchParams(location.search).get('room') || 'UNKNOWN_ROOM';
 
-    const [, setGameState] = useState<any>(null);
+    const [gameState, setGameState] = useState<any>(null);
     const [alertActive, setAlertActive] = useState(false);
     const [, setAttackerIp] = useState('');
-    const [panel, setPanel] = useState<'terminal' | 'playbook'>('terminal');
+
     const [backdoorActive, setBackdoorActive] = useState(false);
     const [gameClear, setGameClear] = useState(false);
     const [blocked, setBlocked] = useState(false);
@@ -138,7 +138,6 @@ export function Defender({ socket }: DefenderProps) {
             if (data.success) {
                 setBackdoorActive(false);
                 writeXterm(`\r\n[+] バックドア(${data.value}) を正常に遮断しました。\r\n`, '32');
-                setPanel('terminal');
             } else {
                 writeXterm(`\r\n[!] ${data.message}\r\n`, '31');
             }
@@ -159,7 +158,6 @@ export function Defender({ socket }: DefenderProps) {
             xtermRef.current?.clear();
             setAlertActive(false);
             setAttackerIp('');
-            setPanel('terminal');
             setBackdoorActive(false);
             setGameClear(false);
             setBlocked(false);
@@ -229,36 +227,19 @@ export function Defender({ socket }: DefenderProps) {
                 </div>
             )}
 
-            {/* タブ */}
-            <div className="flex border-b border-slate-800 bg-slate-900 relative z-10">
-                <button
-                    onClick={() => { setPanel('terminal'); setTimeout(() => fitAddonRef.current?.fit(), 100); }}
-                    className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'terminal' ? 'text-blue-400 border-b-2 border-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
-                >
-                    Terminal
-                </button>
-                <button
-                    onClick={() => setPanel('playbook')}
-                    className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'playbook' ? 'text-yellow-400 border-b-2 border-yellow-500' : 'text-slate-500 hover:text-slate-300'}`}
-                >
-                    Playbook (対応マニュアル) {backdoorActive && '⚠'}
-                </button>
-            </div>
+            {/* メインコンテンツ (ターミナルとPlaybookの並列表示) */}
+            <div className="flex flex-1 overflow-hidden relative z-10">
 
-            {/* ─── ターミナルパネル (DOMは常に存在させ、displayで表示切替) ───────────────────────── */}
-            <div
-                className="flex-1 p-4"
-                style={{
-                    display: panel === 'terminal' ? 'block' : 'none',
-                    minHeight: 'calc(100vh - 110px)'
-                }}
-            >
-                <div ref={terminalRef} className="w-full h-full" />
-            </div>
+                {/* ─── ターミナルパネル ───────────────────────── */}
+                <div
+                    className="flex-1 p-4"
+                    style={{ minHeight: 'calc(100vh - 110px)' }}
+                >
+                    <div ref={terminalRef} className="w-full h-full" />
+                </div>
 
-            {/* ─── Playbook (対応マニュアル) パネル ─────────────────────────── */}
-            {panel === 'playbook' && (
-                <div className="flex-1 overflow-y-auto p-6 space-y-6" style={{ minHeight: 'calc(100vh - 110px)' }}>
+                {/* ─── Playbook (対応マニュアル) パネル ─────────────────────────── */}
+                <div className="w-1/3 min-w-[320px] max-w-sm border-l border-slate-800 bg-slate-900/50 overflow-y-auto p-6 space-y-6" style={{ minHeight: 'calc(100vh - 110px)' }}>
                     <div>
                         <h2 className="text-yellow-400 font-bold text-lg mb-2">📋 セキュリティインシデント対応 Playbook</h2>
                         <p className="text-slate-400 text-sm">
@@ -343,7 +324,7 @@ export function Defender({ socket }: DefenderProps) {
                         </div>
                     </div>
                 </div>
-            )}
+            </div>
         </div>
     );
 }

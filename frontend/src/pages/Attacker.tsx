@@ -174,6 +174,11 @@ export function Attacker({ socket }: AttackerProps) {
             writeXterm(`[*] 右パネルの手順書（Playbook）に従い、コマンドを入力して攻撃を進行させてください。\r\n\r\n`, '33');
         });
 
+        socket.on('exploit_success', (data) => {
+            setPhase('COMPLETED');
+            writeXterm(`\r\n[+] ${data.message}\r\n`, '32');
+        });
+
         socket.on('game_clear', (data) => {
             setPhase('COMPLETED');
             setWinner(data.winner);
@@ -232,6 +237,12 @@ export function Attacker({ socket }: AttackerProps) {
         setTimeout(() => xtermRef.current?.focus(), 100);
     };
 
+    const handleExecuteExploit = () => {
+        if (!socket) return;
+        setPhase('COMPLETED');
+        socket.emit('execute_exploit');
+    };
+
     const handleReset = () => {
         if (!socket) return;
         socket.emit('reset_game');
@@ -271,12 +282,12 @@ export function Attacker({ socket }: AttackerProps) {
                                 onClick={() => handleScan(ip)}
                                 disabled={scanResults[ip] === 'scanning' || scanResults[ip] === 'up'}
                                 className={`px-4 py-6 border rounded font-mono transition-all flex flex-col items-center justify-center shadow-lg hover:-translate-y-1 ${scanResults[ip] === 'up'
-                                        ? 'bg-green-900 border-green-500 text-green-300'
-                                        : scanResults[ip] === 'down'
-                                            ? 'bg-red-950/30 border-red-900/50 text-slate-500 line-through opacity-70'
-                                            : scanResults[ip] === 'scanning'
-                                                ? 'bg-yellow-950 border-yellow-700 text-yellow-500 animate-pulse'
-                                                : 'bg-slate-900 border-slate-700 hover:border-green-500 text-green-500 hover:bg-slate-800'
+                                    ? 'bg-green-900 border-green-500 text-green-300'
+                                    : scanResults[ip] === 'down'
+                                        ? 'bg-red-950/30 border-red-900/50 text-slate-500 line-through opacity-70'
+                                        : scanResults[ip] === 'scanning'
+                                            ? 'bg-yellow-950 border-yellow-700 text-yellow-500 animate-pulse'
+                                            : 'bg-slate-900 border-slate-700 hover:border-green-500 text-green-500 hover:bg-slate-800'
                                     }`}
                             >
                                 <span className={scanResults[ip] === 'up' ? 'font-bold' : ''}>{ip}</span>
@@ -359,12 +370,12 @@ export function Attacker({ socket }: AttackerProps) {
                                     ▶ 攻撃を開始
                                 </button>
                             ) : (
-                                <div className="p-3 bg-red-950/20 border border-red-900/50 rounded">
+                                <div className="p-3 bg-red-950/20 border border-red-900/50 rounded flex flex-col h-full">
                                     <h3 className="text-red-400 font-bold text-xs mb-2">🔥 Playbook (実行手順)</h3>
                                     <div className="text-slate-300 text-[10px] mb-3 leading-relaxed">
                                         以下のコマンドを順番にターミナルに入力し、防衛側より早く攻撃を完了させてください！
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 flex-grow overflow-y-auto">
                                         {ATTACK_STEPS[selectedAttack]?.map((cmd, i) => {
                                             const actualCmd = cmd.replace(/192\.168\.1\.100/g, targetIp);
                                             return (
@@ -375,6 +386,14 @@ export function Attacker({ socket }: AttackerProps) {
                                             );
                                         })}
                                     </div>
+                                    {phase === 'ATTACKING' && (
+                                        <button
+                                            onClick={handleExecuteExploit}
+                                            className="w-full mt-4 text-xs font-bold bg-green-950 hover:bg-green-900 border border-green-900 text-green-400 py-2 rounded transition-colors"
+                                        >
+                                            🚀 エクスプロイト実行（攻撃完了）
+                                        </button>
+                                    )}
                                 </div>
                             )}
 

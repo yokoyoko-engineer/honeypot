@@ -219,6 +219,10 @@ function resetRoom(roomId) {
     rooms[roomId].cronRemoved = false;
     rooms[roomId].sshKeyRemoved = false;
     rooms[roomId].lkmRemoved = false;
+    if (rooms[roomId].attackerPtyProcess) {
+      rooms[roomId].attackerPtyProcess.kill();
+      rooms[roomId].attackerPtyProcess = null;
+    }
     rooms[roomId].attackerSocketId = null;
     rooms[roomId].defenderSocketId = null;
     rooms[roomId].attackPid = Math.floor(Math.random() * 9000) + 1000;
@@ -337,6 +341,49 @@ rmmod() {
 
   r.ptyProcess.onData((data) => {
     io.to(roomId).emit('pty_output', { output: data });
+  });
+}
+
+function initAttackerPty(roomId) {
+  const r = getRoom(roomId);
+  if (r.attackerPtyProcess) return;
+
+  const rcFile = `/tmp/.bashrc_attacker_${roomId}`;
+  const bashrcContent = `
+export PS1="attacker@kali:~# "
+alias nmap="echo 'Starting Nmap...'; sleep 1; echo 'PORT   STATE SERVICE'; echo '22/tcp open  ssh'; echo '80/tcp open  http'"
+alias hydra="echo 'Hydra v9.1 (c) 2020 by van Hauser/THC'; sleep 2; echo '[22][ssh] host: ${r.targetIp || '192.168.1.100'}   login: admin   password: password123'"
+alias ssh="echo 'Welcome to Ubuntu 20.04.2 LTS'; echo 'admin@ubuntu:~# '"
+alias sqlmap="echo 'sqlmap resumed the following injection point(s)...'; sleep 1; echo 'web database dumped.'"
+alias slowhttptest="echo 'Slow HTTP test started...'"
+alias ab="echo 'Benchmarking...'; sleep 1; echo 'Percentage of the requests served within a certain time (ms)'"
+alias ping="echo 'PING 192.168.1.100 (192.168.1.100) 56(84) bytes of data.'; echo '64 bytes from 192.168.1.100: icmp_seq=1 ttl=64 time=0.034 ms'"
+alias wget="echo 'Saving to: ransomware.elf'"
+alias curl="echo 'HTTP/1.1 200 OK'"
+alias nc="echo 'Listening on [0.0.0.0] (family 0, port 4444)'; sleep 1; echo 'Connection received on 192.168.1.100'"
+alias ftp="echo 'Connected to 192.168.1.100. 220 (vsFTPd 3.0.3)'"
+alias sudo="echo 'root@ubuntu:~#'"
+alias hping3="echo 'HPING 192.168.1.100: NO FLAGS are set, 40 headers + 0 data bytes'"
+alias git="echo 'Cloning into diamorphine...'"
+alias make="echo 'make[1]: Entering directory /usr/src/linux-headers'"
+alias insmod="echo 'Module inserted.'"
+alias ssh-keygen="echo 'Generating public/private rsa key pair.'"
+alias scp="echo 'mykey.pub 100% 398 1.1MB/s 00:00'"
+`;
+  fs.writeFileSync(rcFile, bashrcContent);
+
+  r.attackerPtyProcess = pty.spawn('bash', ['--rcfile', rcFile, '-i'], {
+    name: 'xterm-color',
+    cols: 80,
+    rows: 24,
+    cwd: '/root',
+    env: process.env
+  });
+
+  r.attackerPtyProcess.onData((data) => {
+    if (r.attackerSocketId) {
+      io.to(r.attackerSocketId).emit('attacker_pty_output', { output: data });
+    }
   });
 }
 
@@ -689,12 +736,22 @@ io.on('connection', (socket) => {
 
   socket.on('pty_input', ({ input }) => {
     const r = getRoom(socket.roomId);
-    if (r && r.ptyProcess) r.ptyProcess.write(input);
+    if (!r) return;
+    if (socket.role === 'ATTACKER' && r.attackerPtyProcess) {
+      r.attackerPtyProcess.write(input);
+    } else if (socket.role === 'DEFENDER' && r.ptyProcess) {
+      r.ptyProcess.write(input);
+    }
   });
 
   socket.on('pty_resize', ({ cols, rows }) => {
     const r = getRoom(socket.roomId);
-    if (r && r.ptyProcess) r.ptyProcess.resize(cols, rows);
+    if (!r) return;
+    if (socket.role === 'ATTACKER' && r.attackerPtyProcess) {
+      r.attackerPtyProcess.resize(cols, rows);
+    } else if (socket.role === 'DEFENDER' && r.ptyProcess) {
+      r.ptyProcess.resize(cols, rows);
+    }
   });
 
   socket.on('join_room', ({ roomId, role }) => {
@@ -703,7 +760,10 @@ io.on('connection', (socket) => {
     socket.role = role;
 
     const r = getRoom(roomId);
-    if (role === 'ATTACKER') r.attackerSocketId = socket.id;
+    if (role === 'ATTACKER') {
+      r.attackerSocketId = socket.id;
+      initAttackerPty(roomId);
+    }
     if (role === 'DEFENDER') {
       r.defenderSocketId = socket.id;
       initPty(roomId);
@@ -759,39 +819,34 @@ io.on('connection', (socket) => {
       });
     }, 2000);
 
-    // 攻撃の初期成功をAttackerに返す
+    // 攻撃の第一歩をAttackerに返す
     setTimeout(() => {
       if (r.blockedSocketIds.has(socket.id)) {
         socket.emit('blocked'); return;
       }
-      r.phase = 'ATTACK_SUCCESS';
-      socket.emit('attack_success', {
+      socket.emit('attack_started', {
         attackName: attackType.toUpperCase(),
-        detail: `侵入の第一段階を突破しました。ターゲットを確保します。`,
+        detail: `ターミナルを使用してブルートフォース等の攻撃を実行してください。`,
       });
       io.to(r.id).emit('game_state', getPublicState(r));
       broadcastRoomsStatus();
-    }, 4500);
+    }, 500);
   });
 
   // ─── 攻撃側: エクスプロイト・目的達成 ──────────────────────────────────
   socket.on('execute_exploit', () => {
     const r = getRoom(socket.roomId);
-    if (!r || r.blockedSocketIds.has(socket.id) || r.phase !== 'ATTACK_SUCCESS') {
+    if (!r || r.blockedSocketIds.has(socket.id) || r.phase !== 'ATTACKING') {
       socket.emit('blocked'); return;
     }
     console.log(`[ATTACK] Exploit by ${socket.id} in ${r.id}`);
 
-    setTimeout(() => {
-      if (r.blockedSocketIds.has(socket.id)) {
-        socket.emit('blocked'); return;
-      }
-      r.phase = 'COMPLETED';
-      socket.emit('exploit_success', {
-        message: 'エクスプロイト成功。システム権限またはデータを奪取しました。',
-      });
-      io.to(r.id).emit('game_state', getPublicState(r));
-    }, 2500);
+    // Set to COMPLETED directly
+    r.phase = 'COMPLETED';
+    socket.emit('exploit_success', {
+      message: 'エクスプロイト成功。システム権限またはデータを奪取しました。',
+    });
+    io.to(r.id).emit('game_state', getPublicState(r));
   });
 
   // ─── 防御側: ログ取得 ──────────────────────────────────────
