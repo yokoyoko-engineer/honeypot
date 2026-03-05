@@ -37,6 +37,8 @@ function getRoom(roomId) {
       sshKeyRemoved: false,
       lkmRemoved: false,
       ptyProcess: null,
+      availableTargetIps: Array.from({ length: 10 }, () => `192.168.1.${Math.floor(Math.random() * 150) + 50}`),
+      targetIp: null,
     };
   }
   return rooms[roomId];
@@ -62,8 +64,8 @@ function broadcastRoomsStatus() {
 function checkMatchStart(roomId) {
   const r = rooms[roomId];
   if (r.attackerSocketId && r.defenderSocketId && r.phase === 'WAITING') {
-    r.phase = 'IDLE';
-    io.to(roomId).emit('match_started', { message: '対戦相手が見つかりました。ゲームを開始します。' });
+    r.phase = 'SELECTING_IP';
+    io.to(roomId).emit('match_started', { message: '対戦相手が見つかりました。防御側がIPアドレスを選択中です...' });
     io.to(roomId).emit('game_state', getPublicState(r));
     broadcastRoomsStatus();
   }
@@ -74,6 +76,8 @@ function getPublicState(r) {
     phase: r.phase,
     attackType: r.attackType,
     attackerIp: r.attackerIp,
+    availableTargetIps: r.availableTargetIps,
+    targetIp: r.phase === 'SELECTING_IP' || r.phase === 'DISCOVERING' ? null : r.targetIp, // Hide until discovered
   };
 }
 
@@ -709,6 +713,31 @@ io.on('connection', (socket) => {
     socket.emit('game_state', getPublicState(r));
     broadcastRoomsStatus();
     checkMatchStart(roomId);
+  });
+
+  // ─── 防御側: IP選択 ───────────────────────────
+  socket.on('select_target_ip', ({ ip }) => {
+    const r = getRoom(socket.roomId);
+    if (!r || r.phase !== 'SELECTING_IP' || socket.role !== 'DEFENDER') return;
+
+    r.targetIp = ip;
+    r.phase = 'DISCOVERING';
+    io.to(r.id).emit('game_state', getPublicState(r));
+    io.to(r.attackerSocketId).emit('start_discovery', { message: '防御側がターゲットIPを設定しました。スキャンしてIPを特定してください。' });
+  });
+
+  // ─── 攻撃側: IP発見（スキャン） ───────────────────
+  socket.on('scan_target_ip', ({ ip }) => {
+    const r = getRoom(socket.roomId);
+    if (!r || r.phase !== 'DISCOVERING' || socket.role !== 'ATTACKER') return;
+
+    if (ip === r.targetIp) {
+      r.phase = 'IDLE';
+      socket.emit('scan_result', { success: true, ip, message: `IP ${ip} is UP! Target identified.` });
+      io.to(r.id).emit('game_state', { ...getPublicState(r), targetIp: r.targetIp });
+    } else {
+      socket.emit('scan_result', { success: false, ip, message: `Host ${ip} is down.` });
+    }
   });
 
   // ─── 攻撃側: 攻撃開始 ─────────────────────────

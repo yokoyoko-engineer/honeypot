@@ -99,8 +99,12 @@ export function Defender({ socket }: DefenderProps) {
             setGameState(state);
             if (state.phase === 'WAITING') {
                 writeXterm('\r\nゲーム開始を待機中...\r\n', '35');
+            } else if (state.phase === 'SELECTING_IP') {
+                writeXterm('\r\nゲーム開始。防御するIPアドレスを選択してください。\r\n', '35');
+            } else if (state.phase === 'DISCOVERING') {
+                writeXterm('\r\nIP選択完了。攻撃側のスキャンを待機中...\r\n', '35');
             } else if (state.phase === 'IDLE') {
-                writeXterm('\r\nゲーム開始。攻撃者の接続を待機中...\r\n', '35');
+                writeXterm('\r\n攻撃者の接続を待機中...\r\n', '35');
             }
         });
 
@@ -190,10 +194,10 @@ export function Defender({ socket }: DefenderProps) {
             )}
 
             {/* ヘッダー */}
-            <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-700">
+            <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-700 relative z-10">
                 <div className="flex items-center gap-3">
                     <span className="text-blue-400 font-bold">▶ defender@server</span>
-                    <span className="text-slate-500 text-xs">192.168.1.100</span>
+                    <span className="text-slate-500 text-xs">{gameState?.targetIp || '192.168.1.100'}</span>
                     {blocked && <span className="text-xs bg-green-900 text-green-300 px-2 py-0.5 rounded-full">🛡 攻撃者ブロック済み</span>}
                     {backdoorActive && <span className="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded-full animate-pulse">⚠ バックドア検出</span>}
                     {gameClear && <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded-full">✅ インシデント解決</span>}
@@ -206,8 +210,27 @@ export function Defender({ socket }: DefenderProps) {
                 </div>
             </div>
 
+            {/* IP選択画面 (SELECTING_IPフェーズ) */}
+            {gameState?.phase === 'SELECTING_IP' && (
+                <div className="absolute inset-0 top-12 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-8 backdrop-blur-sm">
+                    <h2 className="text-2xl text-blue-400 font-bold mb-4">ターゲットIPアドレスの設定</h2>
+                    <p className="text-slate-300 mb-8">自陣のIPアドレス（攻撃者が狙うIP）を10個の中から1つ選択してください。<br />攻撃者はこのIPを探索して攻撃を開始します。</p>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 max-w-4xl w-full">
+                        {gameState.availableTargetIps?.map((ip: string) => (
+                            <button
+                                key={ip}
+                                onClick={() => socket?.emit('select_target_ip', { ip })}
+                                className="px-4 py-6 bg-slate-900 border border-slate-700 hover:bg-blue-950 hover:border-blue-500 rounded text-green-400 font-mono transition-all hover:-translate-y-1 shadow-lg flex items-center justify-center"
+                            >
+                                {ip}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* タブ */}
-            <div className="flex border-b border-slate-800 bg-slate-900">
+            <div className="flex border-b border-slate-800 bg-slate-900 relative z-10">
                 <button
                     onClick={() => { setPanel('terminal'); setTimeout(() => fitAddonRef.current?.fit(), 100); }}
                     className={`px-4 py-1.5 text-xs font-medium transition-colors ${panel === 'terminal' ? 'text-blue-400 border-b-2 border-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
